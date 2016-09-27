@@ -1,7 +1,8 @@
 SSOBJ=ss.o ssfilter.o
+GFROBJ=gfr.o ssfilter.o
 LNSTATOBJ=lnstat.o lnstat_util.o
 
-TARGETS=ss nstat ifstat rtacct lnstat
+TARGETS=gfr ss nstat ifstat rtacct lnstat
 
 include ../Config
 
@@ -19,6 +20,9 @@ ifeq ($(IP_CONFIG_SETNS),y)
 endif
 
 all: $(TARGETS)
+
+gfr: $(GFROBJ)
+	$(QUIET_LINK)$(CC) $^ $(LDFLAGS) $(LDLIBS) -o $@
 
 ss: $(SSOBJ)
 	$(QUIET_LINK)$(CC) $^ $(LDFLAGS) $(LDLIBS) -o $@
