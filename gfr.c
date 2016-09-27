@@ -230,6 +230,8 @@ static const struct filter default_afs[AF_MAX] = {
 };
 
 static int do_default = 1;
+// This is for the YACC filter in ssfilter.*.
+// It is used to ...
 static struct filter current_filter;
 
 static void filter_db_set(struct filter *f, int db)
@@ -1949,7 +1951,7 @@ static int tcp_show_line(char *line, const struct filter *f, int family)
 	s.ssthresh  = s.ssthresh == -1 ? 0 : s.ssthresh;
 	s.rto	    = s.rto != 3 * hz  ? s.rto / hz : 0;
 
-	inet_stats_print(&s.ss, IPPROTO_TCP);
+	//inet_stats_print(&s.ss, IPPROTO_TCP);
 
 	if (show_options)
 		tcp_timer_print(&s);
@@ -1963,7 +1965,7 @@ static int tcp_show_line(char *line, const struct filter *f, int family)
 	if (show_tcpinfo)
 		tcp_stats_print(&s);
 
-	printf("\n");
+//	printf("\n");
 	return 0;
 }
 
@@ -1986,7 +1988,7 @@ static int generic_record_read(FILE *fp,
 		}
 		line[n-1] = 0;
 
-		if (worker(line, f, fam) < 0)
+//		if (worker(line, f, fam) < 0)
 			return 0;
 	}
 outerr:
@@ -2047,7 +2049,7 @@ static void tcp_show_info(const struct nlmsghdr *nlh, struct inet_diag_msg *r,
 
 	s.ss.state = r->idiag_state;
 
-	print_skmeminfo(tb, INET_DIAG_SKMEMINFO);
+	//print_skmeminfo(tb, INET_DIAG_SKMEMINFO);
 
 	if (tb[INET_DIAG_INFO]) {
 		struct tcp_info *info;
@@ -2162,7 +2164,7 @@ static void tcp_show_info(const struct nlmsghdr *nlh, struct inet_diag_msg *r,
 		s.not_sent = info->tcpi_notsent_bytes;
 		if (info->tcpi_min_rtt && info->tcpi_min_rtt != ~0U)
 			s.min_rtt = (double) info->tcpi_min_rtt / 1000;
-		tcp_stats_print(&s);
+//		tcp_stats_print(&s);
 		free(s.dctcp);
 		free(s.bbr_info);
 	}
@@ -2213,7 +2215,7 @@ static int inet_show_sock(struct nlmsghdr *nlh,
 	if (tb[INET_DIAG_PROTOCOL])
 		protocol = *(__u8 *)RTA_DATA(tb[INET_DIAG_PROTOCOL]);
 
-	inet_stats_print(s, protocol);
+//	inet_stats_print(s, protocol);
 
 	if (show_options) {
 		struct tcpstat t = {};
@@ -2241,11 +2243,11 @@ static int inet_show_sock(struct nlmsghdr *nlh,
 	}
 
 	if (show_mem || show_tcpinfo) {
-		printf("\n\t");
+//		printf("\n\t");
 		tcp_show_info(nlh, r, tb);
 	}
 
-	printf("\n");
+//	printf("\n");
 	return 0;
 }
 
@@ -2544,6 +2546,10 @@ static int tcp_show_netlink_file(struct filter *f)
 	}
 }
 
+static int tcp_noop(char *line, const struct filter *f, int family) {
+  return 0;
+}
+
 static int tcp_show(struct filter *f, int socktype)
 {
 	FILE *fp = NULL;
@@ -2599,7 +2605,7 @@ static int tcp_show(struct filter *f, int socktype)
 			goto outerr;
 
 		setbuffer(fp, buf, bufsize);
-		if (generic_record_read(fp, tcp_show_line, f, AF_INET))
+		if (generic_record_read(fp, tcp_noop, f, AF_INET))
 			goto outerr;
 		fclose(fp);
 	}
@@ -2607,7 +2613,7 @@ static int tcp_show(struct filter *f, int socktype)
 	if ((f->families & (1<<AF_INET6)) &&
 	    (fp = net_tcp6_open()) != NULL) {
 		setbuffer(fp, buf, bufsize);
-		if (generic_record_read(fp, tcp_show_line, f, AF_INET6))
+		if (generic_record_read(fp, tcp_noop, f, AF_INET6))
 			goto outerr;
 		fclose(fp);
 	}
@@ -2657,12 +2663,12 @@ static int dgram_show_line(char *line, const struct filter *f, int family)
 	if (n < 9)
 		opt[0] = 0;
 
-	inet_stats_print(&s, dg_proto == UDP_PROTO ? IPPROTO_UDP : 0);
+//	inet_stats_print(&s, dg_proto == UDP_PROTO ? IPPROTO_UDP : 0);
 
 	if (show_details && opt[0])
 		printf(" opt:\"%s\"", opt);
 
-	printf("\n");
+//	printf("\n");
 	return 0;
 }
 
@@ -2839,12 +2845,12 @@ static void unix_stats_print(struct sockstat *list, struct filter *f)
 				continue;
 		}
 
-		sock_state_print(s, unix_netid_name(s->type));
+//		sock_state_print(s, unix_netid_name(s->type));
 
-		sock_addr_print(s->name ?: "*", " ",
-				int_to_str(s->lport, port_name), NULL);
-		sock_addr_print(peer, " ", int_to_str(s->rport, port_name),
-				NULL);
+//		sock_addr_print(s->name ?: "*", " ",
+//				int_to_str(s->lport, port_name), NULL);
+//		sock_addr_print(peer, " ", int_to_str(s->rport, port_name),
+//				NULL);
 
 		if (show_proc_ctx || show_sock_ctx) {
 			if (find_entry(s->ino, &ctx_buf,
@@ -2859,7 +2865,7 @@ static void unix_stats_print(struct sockstat *list, struct filter *f)
 				free(ctx_buf);
 			}
 		}
-		printf("\n");
+//		printf("\n");
 	}
 }
 
@@ -2919,8 +2925,8 @@ static int unix_show_sock(const struct sockaddr_nl *addr, struct nlmsghdr *nlh,
 			printf(" %c-%c", mask & 1 ? '-' : '<', mask & 2 ? '-' : '>');
 		}
 	}
-	if (show_mem || show_details)
-		printf("\n");
+//	if (show_mem || show_details)
+//		printf("\n");
 
 	return 0;
 }
@@ -3233,7 +3239,7 @@ static int packet_show_sock(const struct sockaddr_nl *addr,
 			fil++;
 		}
 	}
-	printf("\n");
+//	printf("\n");
 	return 0;
 }
 
@@ -3276,7 +3282,7 @@ static int packet_show_line(char *buf, const struct filter *f, int fam)
 	if (packet_stats_print(&stat, f))
 		return 0;
 
-	printf("\n");
+//	printf("\n");
 	return 0;
 }
 
@@ -3400,7 +3406,7 @@ static int netlink_show_one(struct filter *f,
 	if (show_details) {
 		printf(" sk=%llx cb=%llx groups=0x%08x", sk, cb, groups);
 	}
-	printf("\n");
+//	printf("\n");
 
 	return 0;
 }
@@ -3434,13 +3440,13 @@ static int netlink_show_sock(const struct sockaddr_nl *addr,
 			 rq, wq, 0, 0)) {
 		return 0;
 	}
-
+#if 0
 	if (show_mem) {
 		printf("\t");
 		print_skmeminfo(tb, NETLINK_DIAG_MEMINFO);
 		printf("\n");
 	}
-
+#endif
 	return 0;
 }
 
