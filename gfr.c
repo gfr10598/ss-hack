@@ -9,6 +9,20 @@
  * Authors:	Alexey Kuznetsov, <kuznet@ms2.inr.ac.ru>
  */
 
+/*
+ * Strategy:
+ * Keep a map from local port to small slot number.
+ * For each active slow, keep the remote port, data, and state.
+ *
+ * For each cycle, use generic_record_read to read the record.  Parse the local
+ * and remote port and state.  Look up the slot number in the map.  If new,
+ * allocate a new slot.  If old, check the state.  If the state is one of the
+ *
+ *
+ *
+ *
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -1904,6 +1918,163 @@ static void tcp_timer_print(struct tcpstat *s)
 	}
 }
 
+/*
+ * Keep a sorted list of open connections, along with pointers to data
+ * for each connection.
+ */
+typedef struct {
+  int lport;
+  int rport;
+  inet_prefix local;
+  inet_prefix remote;
+  unsigned last_seen;  // Round when this target was last seen.
+  // NULL if non initialized.
+  // lsb == 1 if not in use, 0 if in use or un-initialized.
+  uintptr_t data;
+} connection_node;
+
+#define CONNECTION_DATA_SIZE 256
+
+static bool connection_is_active(connection_node* node) {
+  return (node->data != 0) && ((0x01 & (uintptr_t)node->data) == 0);
+}
+
+// If slot is free, return true, otherwise, return false.
+// Initialize the slow if necessary.
+static bool try_allocate_connection(connection_node* node) {
+  if (node->data == 0) {
+    node->data = (uintptr_t)malloc(CONNECTION_DATA_SIZE);
+    return true;
+  }
+  if ((0x01 && (uintptr_t)node->data) != 0) {
+    node->data |= 0x01;
+    return true;
+  }
+  return false;
+}
+
+static void free_connection(connection_node* node) {
+  if (node->data == 0) {
+    node->data = (uintptr_t)malloc(CONNECTION_DATA_SIZE);
+  }
+  if (((uintptr_t)node->data & 0x01) != 0) {
+    // TODO(gfr) this is an error!
+    return;
+  }
+  node->data |= 0x01;  // Set the LSB.
+}
+
+// Copy connection info, including round number.
+static void copy_connection_info(connection_node* src, connection_node* dest) {
+  uintptr_t tmp = dest->data;
+  *dest = *src;
+  dest->data = tmp;
+}
+
+static void swap_connection_data(connection_node* a, connection_node* b) {
+  a->data ^= b->data;
+  b->data ^= a->data;
+  a->data ^= b->data;
+}
+
+#define MAX_NUM_CONNECTIONS (128 * 1024)  // 128K
+static connection_node g_connections[MAX_NUM_CONNECTIONS];
+static int g_next_connection = 0;  // Index of the next entry to use.
+static int g_connection_count = 0;  // Number of active connections.
+// Pointer to a recently freed connection, or NULL;
+static connection_node* g_last_freed_connection = NULL;
+#define MAX_CONNECTION_ENTRY (g_connections + MAX_NUM_CONNECTIONS - 1)
+#define NEXT_CONNECTION_ENTRY (g_connections + g_next_connection)
+
+static int compare_inet_prefix(inet_prefix* a, inet_prefix* b) {
+  if (a->bytelen > b->bytelen) return 1;
+  if (a->bytelen < b->bytelen) return -1;
+  int i;  // TODO(gfr) Convert to c99
+  for (i = 0; i < 4; ++i) {
+    if (((unsigned char*)(a->data))[i] > ((unsigned char*)(b->data))[i])
+      return 1;
+    if (((unsigned char*)(a->data))[i] < ((unsigned char*)(b->data))[i])
+      return -1;
+  }
+  return 0;
+}
+
+static int compare_connection(connection_node* a, connection_node* b) {
+  if (a->lport > b->lport) return 1;
+  int local = compare_inet_prefix(&a->local, &b->local);
+  if (local != 0) return local;
+
+  if (a->rport < b->rport) return -1;
+  return compare_inet_prefix(&a->remote, &b->remote);
+}
+
+// Find the node that matches the target, and return pointer to it.
+// If not found, return -1
+static connection_node* find_connection(connection_node* target) {
+  connection_node* next = g_connections;
+  while (next < MAX_CONNECTION_ENTRY) {
+    if (compare_connection(target, next) == 0) return next;
+    ++next;
+  }
+  return NULL;
+}
+
+static connection_node* new_connection(void) {
+  g_connection_count++;
+  if (g_last_freed_connection != NULL) {
+    connection_node* node = g_last_freed_connection;
+    g_last_freed_connection = NULL;
+    return node;
+  }
+  connection_node* next = g_connections;
+  while (next < MAX_CONNECTION_ENTRY) {
+    if (try_allocate_connection(next)) return next;
+    ++next;
+  }
+  return NULL;
+}
+
+// Locate or allocate slot for the target, and swap its connection
+// data.  On return, the target argument will have the previous
+// data from the corresponding entry.
+static void update_connection_data(connection_node* target) {
+  connection_node* node = find_connection(target);
+  if (node == NULL) {
+    node = new_connection();
+    copy_connection_info(target, node);
+  }
+  // Update the last seen round number.
+  node->last_seen = target->last_seen;
+  swap_connection_data(target, node);
+}
+
+static void dump_and_clear(connection_node* node) {
+  // TODO(gfr) Write out the data from the node.
+  free_connection(node);
+  g_connection_count--;
+  g_last_freed_connection = node;
+}
+
+static void dump_and_clear_lost_connections(unsigned round) {
+  int reported = 0;
+  connection_node* next = g_connections;
+  while (next < NEXT_CONNECTION_ENTRY) {
+    if (connection_is_active(next) && next->last_seen != round) {
+      dump_and_clear(next);
+      reported++;
+    }
+    ++next;
+  }
+  printf("Reported: %d\n", reported);
+}
+
+static void compact_connections(void) {
+  // TODO implement.
+}
+
+// GFR: For each connection, we need to capture its data and save it, and mark
+// it as updated.  Then, we need to go through all entries that were NOT
+// updated, and output them.
 static int tcp_show_line(char *line, const struct filter *f, int family)
 {
 	int rto = 0, ato = 0;
@@ -1916,8 +2087,10 @@ static int tcp_show_line(char *line, const struct filter *f, int family)
 	if (proc_inet_split_line(line, &loc, &rem, &data))
 		return -1;
 
+        // Hex state value, e.g. C:
 	int state = (data[1] >= 'A') ? (data[1] - 'A' + 10) : (data[1] - '0');
 
+        // What does this do?
 	if (!(f->states & (1 << state)))
 		return 0;
 
@@ -1950,6 +2123,8 @@ static int tcp_show_line(char *line, const struct filter *f, int family)
 	s.rto	    = (double)rto;
 	s.ssthresh  = s.ssthresh == -1 ? 0 : s.ssthresh;
 	s.rto	    = s.rto != 3 * hz  ? s.rto / hz : 0;
+
+        printf("%s ::: ", data);
 
 	inet_stats_print(&s.ss, IPPROTO_TCP);  // OUTPUT
 
@@ -2552,6 +2727,8 @@ static int tcp_show(struct filter *f, int socktype)
 	char *buf = NULL;
 	int bufsize = 64*1024;
 
+        printf("ONCE:\n");
+        
 	if (!filter_af_get(f, AF_INET) && !filter_af_get(f, AF_INET6))
 		return 0;
 
@@ -2566,7 +2743,7 @@ static int tcp_show(struct filter *f, int socktype)
 
 	/* Sigh... We have to parse /proc/net/tcp... */
 
-
+        printf("ONCE:\n");
 	/* Estimate amount of sockets and try to allocate
 	 * huge buffer to read all the table at one read.
 	 * Limit it by 16MB though. The assumption is: as soon as
