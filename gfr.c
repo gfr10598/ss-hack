@@ -4050,7 +4050,7 @@ static const struct option long_opts[] = {
 
 extern void foobar(void);
 
-int main(int argc, char *argv[])
+int c_main(int argc, char *argv[])
 {
   foobar();
 
