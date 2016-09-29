@@ -26,9 +26,6 @@ all: $(TARGETS)
 gfr: $(GFROBJ)
 	$(QUIET_LINK)$(CC) $^ $(LDFLAGS) $(LDLIBS) -o $@
 
-gfr2: $(GFROBJ)
-	$(QUIET_LINK)$(CC) $^ $(LDFLAGS) $(LDLIBS) -std=c++11 -o $@
-
 ss: $(SSOBJ)
 	$(QUIET_LINK)$(CC) $^ $(LDFLAGS) $(LDLIBS) -o $@
 
