@@ -2037,7 +2037,7 @@ static connection_node* new_connection(void) {
 // Locate or allocate slot for the target, and swap its connection
 // data.  On return, the target argument will have the previous
 // data from the corresponding entry.
-static void update_connection_data(connection_node* target) {
+static void update_connection_node(connection_node* target) {
   connection_node* node = find_connection(target);
   if (node == NULL) {
     node = new_connection();
@@ -2072,25 +2072,22 @@ static void compact_connections(void) {
   // TODO implement.
 }
 
-// GFR: For each connection, we need to capture its data and save it, and mark
-// it as updated.  Then, we need to go through all entries that were NOT
-// updated, and output them.
-static int tcp_show_line(char *line, const struct filter *f, int family)
+static int update_connection_data(int family, char *loc, char* rem, char* data) {
+  return 0;
+}
+
+static int tcp_show_data(char *loc, char* rem, char* data, const struct filter *f, int family)
 {
 	int rto = 0, ato = 0;
 	struct tcpstat s = {};
-	char *loc, *rem, *data;
 	char opt[256];
 	int n;
 	int hz = get_user_hz();
 
-	if (proc_inet_split_line(line, &loc, &rem, &data))
-		return -1;
-
-        // Hex state value, e.g. C:
+        // Hex(?) state value, e.g. C:
 	int state = (data[1] >= 'A') ? (data[1] - 'A' + 10) : (data[1] - '0');
 
-        // What does this do?
+        // Filter out any states we don't care about.
 	if (!(f->states & (1 << state)))
 		return 0;
 
@@ -2142,6 +2139,33 @@ static int tcp_show_line(char *line, const struct filter *f, int family)
 
 	printf("\n");
 	return 0;
+}
+
+// GFR: For each connection, we need to capture its data and save it, and mark
+// it as updated.  Then, we need to go through all entries that were NOT
+// updated, and output them.
+static int tcp_show_line(char *line, const struct filter *f, int family)
+{
+	char *loc, *rem, *data;
+
+	if (proc_inet_split_line(line, &loc, &rem, &data))
+		return -1;
+
+        // Hex(?) state value, e.g. C:
+	int state = (data[1] >= 'A') ? (data[1] - 'A' + 10) : (data[1] - '0');
+
+        // Filter out any states we don't care about.
+	if (!(f->states & (1 << state)))
+		return 0;
+
+        // Filter out any other lines we don't care about.
+	struct sockstat ss = {};
+	proc_parse_inet_addr(loc, rem, family, &ss);
+
+	if (f->f && run_ssfilter(f->f, &ss) == 0)
+		return 0;
+
+        update_connection_data(family, loc, rem, data);
 }
 
 static int generic_record_read(FILE *fp,
@@ -4024,8 +4048,12 @@ static const struct option long_opts[] = {
 
 };
 
+extern void foobar(void);
+
 int main(int argc, char *argv[])
 {
+  foobar();
+
 	int saw_states = 0;
 	int saw_query = 0;
 	int do_summary = 0;

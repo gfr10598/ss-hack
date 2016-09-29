@@ -1,5 +1,7 @@
+CXXFLAGS=-std=c++11
+
 SSOBJ=ss.o ssfilter.o
-GFROBJ=gfr.o ssfilter.o
+GFROBJ=gfr.o ssfilter.o gfr2.o
 LNSTATOBJ=lnstat.o lnstat_util.o
 
 TARGETS=gfr ss nstat ifstat rtacct lnstat
@@ -23,6 +25,9 @@ all: $(TARGETS)
 
 gfr: $(GFROBJ)
 	$(QUIET_LINK)$(CC) $^ $(LDFLAGS) $(LDLIBS) -o $@
+
+gfr2: $(GFROBJ)
+	$(QUIET_LINK)$(CC) $^ $(LDFLAGS) $(LDLIBS) -std=c++11 -o $@
 
 ss: $(SSOBJ)
 	$(QUIET_LINK)$(CC) $^ $(LDFLAGS) $(LDLIBS) -o $@
