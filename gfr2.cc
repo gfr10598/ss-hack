@@ -57,19 +57,17 @@ class ConnectionTracker {
     std::printf("%s", value.first.local_addr.c_str());
   }
 
-#if 0
   // Iterate through the map, find any items that are from previous
   // round, and take action on them.
   void FinishRound() {
-    for (auto& it = connections_.begin(); it != connections_.end(); ++it) {
-      if (it->first.round != round_) {
+    for (auto it = connections_.begin(); it != connections_.end(); ++it) {
+      if (it->second.first != round_) {
         OutputItem(*it);
         connections_.erase(it);
       }
     }
     ++round_;  // Don't care about wrapping.
   }
-#endif
  private:
   // TODO(gfr) Consider having separate map for each family.
   ConnectionMap connections_;
@@ -78,11 +76,13 @@ class ConnectionTracker {
 
 extern "C"
 int stash_data(char *loc, char* rem, char* data, int family) {
-
+//  static ConnectionTracker tracker;
+//  tracker.StashData(loc, rem, family, data);
+  std::printf(".");
 }
 
 void foobar() {
-  std::fprintf(stderr, "Hello world.");
+  std::fprintf(stderr, "Hello world.\n");
 }
 
 

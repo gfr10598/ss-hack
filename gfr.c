@@ -110,8 +110,8 @@ int show_users;
 int show_mem;
 int show_tcpinfo;
 int show_bpf;
-int show_proc_ctx;
-int show_sock_ctx;
+int show_proc_ctx;  // requires SELINUX enabled.
+int show_sock_ctx;  // requires SELINUX enabled.
 int show_header = 1;
 /* If show_users & show_proc_ctx only do user_ent_hash_build() once */
 int user_ent_hash_build_init;
@@ -2078,6 +2078,7 @@ static int update_connection_data(int family, char *loc, char* rem, char* data) 
 
 static int tcp_show_data(char *loc, char* rem, char* data, const struct filter *f, int family)
 {
+  fprintf(stderr, ".");
 	int rto = 0, ato = 0;
 	struct tcpstat s = {};
 	char opt[256];
@@ -2137,9 +2138,11 @@ static int tcp_show_data(char *loc, char* rem, char* data, const struct filter *
 	if (show_tcpinfo)
 		tcp_stats_print(&s);  // OUTPUT
 
-	printf("\n");
+	printf("\n");  // OUTPUT
 	return 0;
 }
+
+int stash_data(char *loc, char* rem, char* data, int family);
 
 // GFR: For each connection, we need to capture its data and save it, and mark
 // it as updated.  Then, we need to go through all entries that were NOT
@@ -2165,7 +2168,10 @@ static int tcp_show_line(char *line, const struct filter *f, int family)
 	if (f->f && run_ssfilter(f->f, &ss) == 0)
 		return 0;
 
+        stash_data(loc, rem, data, family);
         update_connection_data(family, loc, rem, data);
+
+        return tcp_show_data(loc, rem, data, f, family);
 }
 
 static int generic_record_read(FILE *fp,
@@ -2243,6 +2249,10 @@ static void print_skmeminfo(struct rtattr *tb[], int attrtype)
 static void tcp_show_info(const struct nlmsghdr *nlh, struct inet_diag_msg *r,
 		struct rtattr *tb[])
 {
+  if (0) {
+    fprintf(stderr, "tcp_show_info suppressed.\n");
+    return;
+  }
 	double rtt = 0;
 	struct tcpstat s = {};
 
@@ -2401,10 +2411,22 @@ static void parse_diag_msg(struct nlmsghdr *nlh, struct sockstat *s)
 	memcpy(s->remote.data, r->id.idiag_dst, s->local.bytelen);
 }
 
+// This is called indirectly by rtnl_dump_filter to do the printing.
+// INTERCEPT - modify this to stash the data!!
 static int inet_show_sock(struct nlmsghdr *nlh,
 			  struct sockstat *s,
 			  int protocol)
 {
+  // STASH THE DATA HERE.
+  if (0) {
+    static int count = 0;
+    count++;
+    if (count % 10 == 0)
+      fprintf(stderr, "inet_show_sock suppressed.  Data size = %ld\n",
+              sizeof(struct nlmsghdr) + sizeof(struct sockstat) + sizeof(int));
+    return 0;
+  }
+        // GFR
 	struct rtattr *tb[INET_DIAG_MAX+1];
 	struct inet_diag_msg *r = NLMSG_DATA(nlh);
 
@@ -2414,6 +2436,7 @@ static int inet_show_sock(struct nlmsghdr *nlh,
 	if (tb[INET_DIAG_PROTOCOL])
 		protocol = *(__u8 *)RTA_DATA(tb[INET_DIAG_PROTOCOL]);
 
+//        if (1) return;  // THIS TRAPS ALL OUTPUT FROM THIS FUNCTION
 	inet_stats_print(s, protocol);  // OUTPUT
 
 	if (show_options) {
@@ -2603,6 +2626,8 @@ static int kill_inet_sock(struct nlmsghdr *h, void *arg)
 	return rtnl_talk(rth, &req.nlh, NULL, 0);
 }
 
+// INTERCEPT
+// stash the data instead of printing.
 static int show_one_inet_sock(const struct sockaddr_nl *addr,
 		struct nlmsghdr *h, void *arg)
 {
@@ -2629,6 +2654,15 @@ static int show_one_inet_sock(const struct sockaddr_nl *addr,
 		}
 	}
 
+        // STASH DATA HERE.
+        if (1) {
+          static int count = 0;
+          count++;
+          if (count % 10 == 0)
+             fprintf(stderr, "show_one_inet_sock suppressed.  data size = %d not including filter!\n",
+                     h->nlmsg_len + sizeof(struct inet_diag_arg));
+          return 0;
+        }
 	err = inet_show_sock(h, &s, diag_arg->protocol);
 	if (err < 0)
 		return err;
@@ -2636,8 +2670,17 @@ static int show_one_inet_sock(const struct sockaddr_nl *addr,
 	return 0;
 }
 
+// This generates majority, but not all, of the output for
+// misc/gfr -t -i -H -e -u -x -a -m
 static int inet_show_netlink(struct filter *f, FILE *dump_fp, int protocol)
 {
+  if (0) {
+    fprintf(stderr, "inet_show_netlink suppressed.\n");
+    return 0;
+  } else {
+    fprintf(stderr, "inet_show_netlink\n");
+  }
+  fprintf(stderr, "protocol = %d\n", protocol);  // TCP is 6
 	int err = 0;
 	struct rtnl_handle rth, rth2;
 	int family = PF_INET;
@@ -2663,6 +2706,7 @@ again:
 	if ((err = sockdiag_send(family, rth.fd, protocol, f)))
 		goto Exit;
 
+        //GFR this is where show_one_inet_sock is passed...
 	if ((err = rtnl_dump_filter(&rth, show_one_inet_sock, &arg))) {
 		if (family != PF_UNSPEC) {
 			family = PF_UNSPEC;
@@ -2684,6 +2728,10 @@ Exit:
 
 static int tcp_show_netlink_file(struct filter *f)
 {
+  if (0) {
+    fprintf(stderr, "tcp_show_netlink_file suppressed\n");
+    return 0;
+  }
 	FILE	*fp;
 	char	buf[16384];
 
@@ -2751,23 +2799,24 @@ static int tcp_show(struct filter *f, int socktype)
 	char *buf = NULL;
 	int bufsize = 64*1024;
 
-        printf("ONCE:\n");
-        
-	if (!filter_af_get(f, AF_INET) && !filter_af_get(f, AF_INET6))
+	if (!filter_af_get(f, AF_INET) && !filter_af_get(f, AF_INET6)) {
+                printf("AF_INET path:\n");
 		return 0;
+        }
 
 	dg_proto = TCP_PROTO;
 
-	if (getenv("TCPDIAG_FILE"))
+	if (getenv("TCPDIAG_FILE")) {
 		return tcp_show_netlink_file(f);
+        }
 
 	if (!getenv("PROC_NET_TCP") && !getenv("PROC_ROOT")
-	    && inet_show_netlink(f, NULL, socktype) == 0)
+	    && inet_show_netlink(f, NULL, socktype) == 0) {
 		return 0;
+        }
 
 	/* Sigh... We have to parse /proc/net/tcp... */
 
-        printf("ONCE:\n");
 	/* Estimate amount of sockets and try to allocate
 	 * huge buffer to read all the table at one read.
 	 * Limit it by 16MB though. The assumption is: as soon as
@@ -2831,6 +2880,7 @@ outerr:
 }
 
 
+// INTERCEPT
 static int dgram_show_line(char *line, const struct filter *f, int family)
 {
 	struct sockstat s = {};
@@ -2838,6 +2888,14 @@ static int dgram_show_line(char *line, const struct filter *f, int family)
 	char opt[256];
 	int n;
 
+  if (1) {
+    static int count = 0;
+    count++;
+    if (count % 40 == 0)
+      fprintf(stderr, "dgram_show_line suppressed.  Data size = %d not including subfilters\n",
+              strlen(line) + sizeof(struct filter) + sizeof(int));
+    return 0;
+  }
 	if (proc_inet_split_line(line, &loc, &rem, &data))
 		return -1;
 
@@ -2871,6 +2929,13 @@ static int dgram_show_line(char *line, const struct filter *f, int family)
 
 static int udp_show(struct filter *f)
 {
+  if (0) {
+    fprintf(stderr, "udp_show suppressed\n");
+    return 0;
+  } else {
+    fprintf(stderr, "udp_show\n");
+  }
+
 	FILE *fp = NULL;
 
 	if (!filter_af_get(f, AF_INET) && !filter_af_get(f, AF_INET6))
@@ -2911,6 +2976,12 @@ outerr:
 
 static int raw_show(struct filter *f)
 {
+  if (0) {
+    fprintf(stderr, "raw_show suppressed\n");
+    return 0;
+  } else {
+    fprintf(stderr, "raw_show\n");
+  }
 	FILE *fp = NULL;
 
 	if (!filter_af_get(f, AF_INET) && !filter_af_get(f, AF_INET6))
@@ -3066,9 +3137,20 @@ static void unix_stats_print(struct sockstat *list, struct filter *f)
 	}
 }
 
+// INTERCEPT
+// instead of printing stuff here, stash it away and only print when the socket
+// disappears.
 static int unix_show_sock(const struct sockaddr_nl *addr, struct nlmsghdr *nlh,
 		void *arg)
 {
+  if (1) {
+    static int count = 0;
+    count++;
+    if (count % 40 == 0)
+      fprintf(stderr, "unix_show_sock suppressed.  Data size = %d not including subfilters\n",
+              sizeof(*addr) + nlh->nlmsg_len + sizeof(struct filter));
+    return 0;
+  }
 	struct filter *f = (struct filter *)arg;
 	struct unix_diag_msg *r = NLMSG_DATA(nlh);
 	struct rtattr *tb[UNIX_DIAG_MAX+1];
@@ -3108,6 +3190,7 @@ static int unix_show_sock(const struct sockaddr_nl *addr, struct nlmsghdr *nlh,
 	if (f->f && run_ssfilter(f->f, &stat) == 0)
 		return 0;
 
+        // STASH DATA HERE.  (200 bytes)
 	unix_stats_print(&stat, f);
 
 	if (show_mem) {
@@ -3161,11 +3244,21 @@ static int unix_show_netlink(struct filter *f)
 	if (show_mem)
 		req.r.udiag_show |= UDIAG_SHOW_MEMINFO;
 
+        // INTERCEPT
 	return handle_netlink_request(f, &req.nlh, sizeof(req), unix_show_sock);
 }
 
+// With environment variables set, all the output comes from here.
 static int unix_show(struct filter *f)
 {
+  if (0) {
+    // This shows about 1/4 of the content.
+    static int count = 0;
+    count++;
+    if (count % 40 == 0)
+    fprintf(stderr, "unix_show suppressed\n");
+    return 0;
+  }
 	FILE *fp;
 	char buf[256];
 	char name[128];
@@ -3448,11 +3541,13 @@ static int packet_show_netlink(struct filter *f)
 	req.r.pdiag_show = PACKET_SHOW_INFO | PACKET_SHOW_MEMINFO |
 		PACKET_SHOW_FILTER | PACKET_SHOW_RING_CFG | PACKET_SHOW_FANOUT;
 
+        // INTERCEPT
 	return handle_netlink_request(f, &req.nlh, sizeof(req), packet_show_sock);
 }
 
 static int packet_show_line(char *buf, const struct filter *f, int fam)
 {
+  printf("......");
 	unsigned long long sk;
 	struct sockstat stat = {};
 	int type, prot, iface, state, rq, uid, ino;
@@ -3655,6 +3750,7 @@ static int netlink_show_netlink(struct filter *f)
 	req.r.sdiag_protocol = NDIAG_PROTO_ALL;
 	req.r.ndiag_show = NDIAG_SHOW_GROUPS | NDIAG_SHOW_MEMINFO;
 
+        // INTERCEPT
 	return handle_netlink_request(f, &req.nlh, sizeof(req), netlink_show_sock);
 }
 
