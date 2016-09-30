@@ -9,19 +9,6 @@
  * Authors:	Alexey Kuznetsov, <kuznet@ms2.inr.ac.ru>
  */
 
-/*
- * Strategy:
- * Keep a map from local port to small slot number.
- * For each active slow, keep the remote port, data, and state.
- *
- * For each cycle, use generic_record_read to read the record.  Parse the local
- * and remote port and state.  Look up the slot number in the map.  If new,
- * allocate a new slot.  If old, check the state.  If the state is one of the
- *
- *
- *
- *
- */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -84,10 +71,8 @@ static int show_options;
 int show_details;
 static int show_mem;
 static int show_tcpinfo;
-static int show_bpf;
 static int show_header = 1;
-static int follow_events;
-       
+
 static int netid_width;
 static int state_width;
 static int addrp_width;
@@ -280,31 +265,6 @@ static FILE *generic_proc_open(const char *env, const char *name)
 	return fopen(p, "r");
 }
 
-
-static FILE *net_raw_open(void)
-{
-	return generic_proc_open("PROC_NET_RAW", "net/raw");
-}
-
-static FILE *net_raw6_open(void)
-{
-	return generic_proc_open("PROC_NET_RAW6", "net/raw6");
-}
-
-static FILE *net_unix_open(void)
-{
-	return generic_proc_open("PROC_NET_UNIX", "net/unix");
-}
-
-static FILE *net_packet_open(void)
-{
-	return generic_proc_open("PROC_NET_PACKET", "net/packet");
-}
-
-static FILE *net_netlink_open(void)
-{
-	return generic_proc_open("PROC_NET_NETLINK", "net/netlink");
-}
 
 static FILE *ephemeral_ports_open(void)
 {
@@ -1025,13 +985,6 @@ static void xll_init(void)
 	xll_initted = 1;
 }
 
-static const char *xll_index_to_name(int index)
-{
-	if (!xll_initted)
-		xll_init();
-	return ll_index_to_name(index);
-}
-
 static int xll_name_to_index(const char *dev)
 {
 	if (!xll_initted)
@@ -1039,8 +992,12 @@ static int xll_name_to_index(const char *dev)
 	return ll_name_to_index(dev);
 }
 
+/*******************************************************************
+ * Code for ssfilter (yacc).
+ ******************************************************************/
 void *parse_devcond(char *name)
 {
+        fprintf(stderr, "%4d Called!\n", __LINE__);
 	struct aafilter a = { .iface = 0 };
 	struct aafilter *res;
 
@@ -1064,6 +1021,7 @@ void *parse_devcond(char *name)
 
 void *parse_hostcond(char *addr, bool is_port)
 {
+        fprintf(stderr, "%4d Called!\n", __LINE__);
 	char *port = NULL;
 	struct aafilter a = { .port = -1 };
 	struct aafilter *res;
@@ -1232,6 +1190,7 @@ out:
 
 void *parse_markmask(const char *markmask)
 {
+        fprintf(stderr, "%4d Called!\n", __LINE__);
 	struct aafilter a, *res;
 
 	if (strchr(markmask, '/')) {
@@ -1248,6 +1207,8 @@ void *parse_markmask(const char *markmask)
 		memcpy(res, &a, sizeof(a));
 	return res;
 }
+
+/*******************************************************************/
 
 static char *proto_name(int protocol)
 {
@@ -1271,55 +1232,6 @@ static void inet_stats_print(struct sockstat *s, int protocol)
 
 	inet_addr_print(&s->local, s->lport, s->iface);
 	inet_addr_print(&s->remote, s->rport, 0);
-}
-
-static int proc_parse_inet_addr(char *loc, char *rem, int family, struct
-		sockstat * s)
-{
-	s->local.family = s->remote.family = family;
-	if (family == AF_INET) {
-		sscanf(loc, "%x:%x", s->local.data, (unsigned *)&s->lport);
-		sscanf(rem, "%x:%x", s->remote.data, (unsigned *)&s->rport);
-		s->local.bytelen = s->remote.bytelen = 4;
-		return 0;
-	} else {
-		sscanf(loc, "%08x%08x%08x%08x:%x",
-		       s->local.data,
-		       s->local.data + 1,
-		       s->local.data + 2,
-		       s->local.data + 3,
-		       &s->lport);
-		sscanf(rem, "%08x%08x%08x%08x:%x",
-		       s->remote.data,
-		       s->remote.data + 1,
-		       s->remote.data + 2,
-		       s->remote.data + 3,
-		       &s->rport);
-		s->local.bytelen = s->remote.bytelen = 16;
-		return 0;
-	}
-	return -1;
-}
-
-static int proc_inet_split_line(char *line, char **loc, char **rem, char **data)
-{
-	char *p;
-
-	if ((p = strchr(line, ':')) == NULL)
-		return -1;
-
-	*loc = p+2;
-	if ((p = strchr(*loc, ':')) == NULL)
-		return -1;
-
-	p[5] = 0;
-	*rem = p+6;
-	if ((p = strchr(*rem, ':')) == NULL)
-		return -1;
-
-	p[5] = 0;
-	*data = p+6;
-	return 0;
 }
 
 static char *sprint_bw(char *buf, double bw)
@@ -1466,33 +1378,6 @@ static void tcp_timer_print(struct tcpstat *s)
 }
 
 int stash_data(char *loc, char* rem, char* data, int family);
-
-static int generic_record_read(FILE *fp,
-			       int (*worker)(char*, const struct filter *, int),
-			       const struct filter *f, int fam)
-{
-	char line[256];
-
-	/* skip header */
-	if (fgets(line, sizeof(line), fp) == NULL)
-		goto outerr;
-
-	while (fgets(line, sizeof(line), fp) != NULL) {
-		int n = strlen(line);
-
-		if (n == 0 || line[n-1] != '\n') {
-			errno = -EINVAL;
-			return -1;
-		}
-		line[n-1] = 0;
-
-		if (worker(line, f, fam) < 0)
-			return 0;
-	}
-outerr:
-
-	return ferror(fp) ? -1 : 0;
-}
 
 static void print_skmeminfo(struct rtattr *tb[], int attrtype)
 {
@@ -2100,61 +1985,12 @@ static int tcp_show(struct filter *f, int socktype)
 		return tcp_show_netlink_file(f);
         }
 
-	if (!getenv("PROC_NET_TCP") && !getenv("PROC_ROOT")
-	    && inet_show_netlink(f, NULL, socktype) == 0) {
+	if (inet_show_netlink(f, NULL, socktype) == 0) {
 		return 0;
         }
 
-        fprintf(stderr, "Turns out we need this backup code in tcp_show after all!\n");
+        fprintf(stderr, "%4d Turns out we need this backup code after all!\n", __LINE__);
         exit(1);
-}
-
-
-// INTERCEPT
-static int dgram_show_line(char *line, const struct filter *f, int family)
-{
-	struct sockstat s = {};
-	char *loc, *rem, *data;
-	char opt[256];
-	int n;
-
-  if (STASH_DATA) {
-    static int count = 0;
-    count++;
-    if (count % 40 == 0)
-      fprintf(stderr, "dgram_show_line suppressed.  Data size = %ld not including subfilters\n",
-              strlen(line) + sizeof(struct filter) + sizeof(int));
-    return 0;
-  }
-	if (proc_inet_split_line(line, &loc, &rem, &data))
-		return -1;
-
-	int state = (data[1] >= 'A') ? (data[1] - 'A' + 10) : (data[1] - '0');
-
-	if (!(f->states & (1 << state)))
-		return 0;
-
-	proc_parse_inet_addr(loc, rem, family, &s);
-
-	if (f->f && run_ssfilter(f->f, &s) == 0)
-		return 0;
-
-	opt[0] = 0;
-	n = sscanf(data, "%x %x:%x %*x:%*x %*x %d %*d %u %d %llx %[^\n]\n",
-	       &s.state, &s.wq, &s.rq,
-	       &s.uid, &s.ino,
-	       &s.refcnt, &s.sk, opt);
-
-	if (n < 9)
-		opt[0] = 0;
-
-	inet_stats_print(&s, dg_proto == UDP_PROTO ? IPPROTO_UDP : 0);
-
-	if (show_details && opt[0])
-		printf(" opt:\"%s\"", opt);
-
-	printf("\n");
-	return 0;
 }
 
 static int udp_show(struct filter *f)
@@ -2171,72 +2007,15 @@ static int udp_show(struct filter *f)
 
 	dg_proto = UDP_PROTO;
 
-	if (!getenv("PROC_NET_UDP") && !getenv("PROC_ROOT")
-	    && inet_show_netlink(f, NULL, IPPROTO_UDP) == 0)
+	if (inet_show_netlink(f, NULL, IPPROTO_UDP) == 0)
 		return 0;
 
-        fprintf(stderr, "Turns out we need this backup code in tcp_show after all!\n");
+        fprintf(stderr, "%4d Turns out we need this backup code after all!\n", __LINE__);
         exit(1);
-}
-
-static int raw_show(struct filter *f)
-{
-  if (SUPPRESS) {
-    fprintf(stderr, "raw_show suppressed\n");
-    return 0;
-  } else {
-    fprintf(stderr, "raw_show\n");
-  }
-	FILE *fp = NULL;
-
-	if (!filter_af_get(f, AF_INET) && !filter_af_get(f, AF_INET6))
-		return 0;
-
-	dg_proto = RAW_PROTO;
-
-        fprintf(stderr, "Hmm....\n");
-	if (f->families&(1<<AF_INET)) {
-		if ((fp = net_raw_open()) == NULL)
-			goto outerr;
-		if (generic_record_read(fp, dgram_show_line, f, AF_INET))
-			goto outerr;
-		fclose(fp);
-	}
-
-	if ((f->families&(1<<AF_INET6)) &&
-	    (fp = net_raw6_open()) != NULL) {
-		if (generic_record_read(fp, dgram_show_line, f, AF_INET6))
-			goto outerr;
-		fclose(fp);
-	}
-	return 0;
-
-outerr:
-	do {
-		int saved_errno = errno;
-
-		if (fp)
-			fclose(fp);
-		errno = saved_errno;
-		return -1;
-	} while (0);
 }
 
 int unix_state_map[] = { SS_CLOSE, SS_SYN_SENT,
 			 SS_ESTABLISHED, SS_CLOSING };
-
-#define MAX_UNIX_REMEMBER (1024*1024/sizeof(struct sockstat))
-
-static void unix_list_free(struct sockstat *list)
-{
-	while (list) {
-		struct sockstat *s = list;
-
-		list = list->next;
-		free(s->name);
-		free(s);
-	}
-}
 
 static const char *unix_netid_name(int type)
 {
@@ -2454,335 +2233,14 @@ static int unix_show(struct filter *f)
     fprintf(stderr, "unix_show suppressed\n");
     return 0;
   }
-	FILE *fp;
-	char buf[256];
-	char name[128];
-	int  newformat = 0;
-	int  cnt;
 
 	if (!filter_af_get(f, AF_UNIX))
 		return 0;
 
-	if (!unix_use_proc() && unix_show_netlink(f) == 0)
+	if (unix_show_netlink(f) == 0)
 		return 0;
-
-        fprintf(stderr, "%4d Using net_unix_open().\n", __LINE__);
-        // TODO(gfr) Consider dropping this code.
-	if ((fp = net_unix_open()) == NULL)
-		return -1;
-	if (!fgets(buf, sizeof(buf), fp)) {
-		fclose(fp);
-		return -1;
-	}
-
-	if (memcmp(buf, "Peer", 4) == 0)
-		newformat = 1;
-	cnt = 0;
-
-        // Collect all results into list.
-	struct sockstat *list = NULL;
-	while (fgets(buf, sizeof(buf), fp)) {
-		struct sockstat *u, **insp;
-		int flags;
-
-		if (!(u = calloc(1, sizeof(*u))))
-			break;
-		u->name = NULL;
-		u->peer_name = NULL;
-
-		if (sscanf(buf, "%x: %x %x %x %x %x %d %s",
-			   &u->rport, &u->rq, &u->wq, &flags, &u->type,
-			   &u->state, &u->ino, name) < 8)
-			name[0] = 0;
-
-		u->lport = u->ino;
-		u->local.family = u->remote.family = AF_UNIX;
-
-		if (flags & (1 << 16)) {
-			u->state = SS_LISTEN;
-		} else {
-			u->state = unix_state_map[u->state-1];
-			if (u->type == SOCK_DGRAM && u->state == SS_CLOSE && u->rport)
-				u->state = SS_ESTABLISHED;
-		}
-
-		if (!newformat) {
-			u->rport = 0;
-			u->rq = 0;
-			u->wq = 0;
-		}
-
-		insp = &list;
-		while (*insp) {
-			if (u->type < (*insp)->type ||
-			    (u->type == (*insp)->type &&
-			     u->ino < (*insp)->ino))
-				break;
-			insp = &(*insp)->next;
-		}
-		u->next = *insp;
-		*insp = u;
-
-		if (name[0]) {
-			if ((u->name = malloc(strlen(name)+1)) == NULL)
-				break;
-			strcpy(u->name, name);
-		}
-		if (++cnt > MAX_UNIX_REMEMBER) {
-			unix_stats_print(list, f);
-			unix_list_free(list);
-			list = NULL;
-			cnt = 0;
-		}
-	}
-	fclose(fp);
-
-        // Output list contents.
-	if (list) {
-		unix_stats_print(list, f);
-		unix_list_free(list);
-		list = NULL;
-		cnt = 0;
-	}
-
-	return 0;
-}
-
-static int packet_stats_print(struct sockstat *s, const struct filter *f)
-{
-	const char *addr, *port;
-	char ll_name[16];
-
-	if (f->f) {
-		s->local.family = AF_PACKET;
-		s->remote.family = AF_PACKET;
-		s->local.data[0] = s->prot;
-		if (run_ssfilter(f->f, s) == 0)
-			return 1;
-	}
-
-	sock_state_print(s, s->type == SOCK_RAW ? "p_raw" : "p_dgr");
-
-	if (s->prot == 3)
-		addr = "*";
-	else
-		addr = ll_proto_n2a(htons(s->prot), ll_name, sizeof(ll_name));
-
-	if (s->iface == 0)
-		port = "*";
-	else
-		port = xll_index_to_name(s->iface);
-
-	sock_addr_print(addr, ":", port, NULL);
-	sock_addr_print("", "*", "", NULL);
-
-	if (show_details)
-		sock_details_print(s);
-
-	return 0;
-}
-
-static void packet_show_ring(struct packet_diag_ring *ring)
-{
-	printf("blk_size:%d", ring->pdr_block_size);
-	printf(",blk_nr:%d", ring->pdr_block_nr);
-	printf(",frm_size:%d", ring->pdr_frame_size);
-	printf(",frm_nr:%d", ring->pdr_frame_nr);
-	printf(",tmo:%d", ring->pdr_retire_tmo);
-	printf(",features:0x%x", ring->pdr_features);
-}
-
-static int packet_show_sock(const struct sockaddr_nl *addr,
-		struct nlmsghdr *nlh, void *arg)
-{
-	const struct filter *f = arg;
-	struct packet_diag_msg *r = NLMSG_DATA(nlh);
-	struct packet_diag_info *pinfo = NULL;
-	struct packet_diag_ring *ring_rx = NULL, *ring_tx = NULL;
-	struct rtattr *tb[PACKET_DIAG_MAX+1];
-	struct sockstat stat = {};
-	uint32_t fanout = 0;
-	bool has_fanout = false;
-
-	parse_rtattr(tb, PACKET_DIAG_MAX, (struct rtattr *)(r+1),
-		     nlh->nlmsg_len - NLMSG_LENGTH(sizeof(*r)));
-
-	/* use /proc/net/packet if all info are not available */
-	if (!tb[PACKET_DIAG_MEMINFO])
-		return -1;
-
-	stat.type   = r->pdiag_type;
-	stat.prot   = r->pdiag_num;
-	stat.ino    = r->pdiag_ino;
-	stat.state  = SS_CLOSE;
-	stat.sk	    = cookie_sk_get(&r->pdiag_cookie[0]);
-
-	if (tb[PACKET_DIAG_MEMINFO]) {
-		__u32 *skmeminfo = RTA_DATA(tb[PACKET_DIAG_MEMINFO]);
-
-		stat.rq = skmeminfo[SK_MEMINFO_RMEM_ALLOC];
-	}
-
-	if (tb[PACKET_DIAG_INFO]) {
-		pinfo = RTA_DATA(tb[PACKET_DIAG_INFO]);
-		stat.lport = stat.iface = pinfo->pdi_index;
-	}
-
-	if (tb[PACKET_DIAG_UID])
-		stat.uid = *(__u32 *)RTA_DATA(tb[PACKET_DIAG_UID]);
-
-	if (tb[PACKET_DIAG_RX_RING])
-		ring_rx = RTA_DATA(tb[PACKET_DIAG_RX_RING]);
-
-	if (tb[PACKET_DIAG_TX_RING])
-		ring_tx = RTA_DATA(tb[PACKET_DIAG_TX_RING]);
-
-	if (tb[PACKET_DIAG_FANOUT]) {
-		has_fanout = true;
-		fanout = *(uint32_t *)RTA_DATA(tb[PACKET_DIAG_FANOUT]);
-	}
-
-	if (packet_stats_print(&stat, f))
-		return 0;
-
-	if (show_details) {
-		if (pinfo) {
-			printf("\n\tver:%d", pinfo->pdi_version);
-			printf(" cpy_thresh:%d", pinfo->pdi_copy_thresh);
-			printf(" flags( ");
-			if (pinfo->pdi_flags & PDI_RUNNING)
-				printf("running");
-			if (pinfo->pdi_flags & PDI_AUXDATA)
-				printf(" auxdata");
-			if (pinfo->pdi_flags & PDI_ORIGDEV)
-				printf(" origdev");
-			if (pinfo->pdi_flags & PDI_VNETHDR)
-				printf(" vnethdr");
-			if (pinfo->pdi_flags & PDI_LOSS)
-				printf(" loss");
-			if (!pinfo->pdi_flags)
-				printf("0");
-			printf(" )");
-		}
-		if (ring_rx) {
-			printf("\n\tring_rx(");
-			packet_show_ring(ring_rx);
-			printf(")");
-		}
-		if (ring_tx) {
-			printf("\n\tring_tx(");
-			packet_show_ring(ring_tx);
-			printf(")");
-		}
-		if (has_fanout) {
-			uint16_t type = (fanout >> 16) & 0xffff;
-
-			printf("\n\tfanout(");
-			printf("id:%d,", fanout & 0xffff);
-			printf("type:");
-
-			if (type == 0)
-				printf("hash");
-			else if (type == 1)
-				printf("lb");
-			else if (type == 2)
-				printf("cpu");
-			else if (type == 3)
-				printf("roll");
-			else if (type == 4)
-				printf("random");
-			else if (type == 5)
-				printf("qm");
-			else
-				printf("0x%x", type);
-
-			printf(")");
-		}
-	}
-
-	if (show_bpf && tb[PACKET_DIAG_FILTER]) {
-		struct sock_filter *fil =
-		       RTA_DATA(tb[PACKET_DIAG_FILTER]);
-		int num = RTA_PAYLOAD(tb[PACKET_DIAG_FILTER]) /
-			  sizeof(struct sock_filter);
-
-		printf("\n\tbpf filter (%d): ", num);
-		while (num) {
-			printf(" 0x%02x %u %u %u,",
-			      fil->code, fil->jt, fil->jf, fil->k);
-			num--;
-			fil++;
-		}
-	}
-	printf("\n");
-	return 0;
-}
-
-static int packet_show_netlink(struct filter *f)
-{
-	DIAG_REQUEST(req, struct packet_diag_req r);
-
-	req.r.sdiag_family = AF_PACKET;
-	req.r.pdiag_show = PACKET_SHOW_INFO | PACKET_SHOW_MEMINFO |
-		PACKET_SHOW_FILTER | PACKET_SHOW_RING_CFG | PACKET_SHOW_FANOUT;
-
-        // INTERCEPT
-        fprintf(stderr, "Calling handle_netlink_request. %d\n", __LINE__);
-	return handle_netlink_request(f, &req.nlh, sizeof(req), packet_show_sock);
-}
-
-static int packet_show_line(char *buf, const struct filter *f, int fam)
-{
-  printf("......");
-	unsigned long long sk;
-	struct sockstat stat = {};
-	int type, prot, iface, state, rq, uid, ino;
-
-	sscanf(buf, "%llx %*d %d %x %d %d %u %u %u",
-			&sk,
-			&type, &prot, &iface, &state,
-			&rq, &uid, &ino);
-
-	if (stat.type == SOCK_RAW && !(f->dbs&(1<<PACKET_R_DB)))
-		return 0;
-	if (stat.type == SOCK_DGRAM && !(f->dbs&(1<<PACKET_DG_DB)))
-		return 0;
-
-	stat.type  = type;
-	stat.prot  = prot;
-	stat.lport = stat.iface = iface;
-	stat.state = state;
-	stat.rq    = rq;
-	stat.uid   = uid;
-	stat.ino   = ino;
-	stat.state = SS_CLOSE;
-
-	if (packet_stats_print(&stat, f))
-		return 0;
-
-	printf("\n");
-	return 0;
-}
-
-static int packet_show(struct filter *f)
-{
-	FILE *fp;
-	int rc = 0;
-
-	if (!filter_af_get(f, AF_PACKET) || !(f->states & (1 << SS_CLOSE)))
-		return 0;
-
-	if (!getenv("PROC_NET_PACKET") && !getenv("PROC_ROOT") &&
-			packet_show_netlink(f) == 0)
-		return 0;
-
-	if ((fp = net_packet_open()) == NULL)
-		return -1;
-	if (generic_record_read(fp, packet_show_line, f, AF_PACKET))
-		rc = -1;
-
-	fclose(fp);
-	return rc;
+        fprintf(stderr, "%4d Turns out we need this backup code after all!\n", __LINE__);
+        exit(1);
 }
 
 static int netlink_show_one(struct filter *f,
@@ -2921,96 +2379,18 @@ static int netlink_show_netlink(struct filter *f)
 
 static int netlink_show(struct filter *f)
 {
-	FILE *fp;
-	char buf[256];
-	int prot, pid;
-	unsigned int groups;
-	int rq, wq, rc;
-	unsigned long long sk, cb;
-
 	if (!filter_af_get(f, AF_NETLINK) || !(f->states & (1 << SS_CLOSE)))
 		return 0;
 
-	if (!getenv("PROC_NET_NETLINK") && !getenv("PROC_ROOT") &&
-		netlink_show_netlink(f) == 0)
+	if (netlink_show_netlink(f) == 0)
 		return 0;
-
-	if ((fp = net_netlink_open()) == NULL)
-		return -1;
-	if (!fgets(buf, sizeof(buf), fp)) {
-		fclose(fp);
-		return -1;
-	}
-
-	while (fgets(buf, sizeof(buf), fp)) {
-		sscanf(buf, "%llx %d %d %x %d %d %llx %d",
-		       &sk,
-		       &prot, &pid, &groups, &rq, &wq, &cb, &rc);
-
-		netlink_show_one(f, prot, pid, groups, 0, 0, 0, rq, wq, sk, cb);
-	}
-
-	fclose(fp);
-	return 0;
+        fprintf(stderr, "%4d Turns out we need this backup code after all!\n", __LINE__);
+        exit(1);
 }
 
 struct sock_diag_msg {
 	__u8 sdiag_family;
 };
-
-static int generic_show_sock(const struct sockaddr_nl *addr,
-		struct nlmsghdr *nlh, void *arg)
-{
-	struct sock_diag_msg *r = NLMSG_DATA(nlh);
-	struct inet_diag_arg inet_arg = { .f = arg, .protocol = IPPROTO_MAX };
-
-	switch (r->sdiag_family) {
-	case AF_INET:
-	case AF_INET6:
-		return show_one_inet_sock(addr, nlh, &inet_arg);
-	case AF_UNIX:
-		return unix_show_sock(addr, nlh, arg);
-	case AF_PACKET:
-		return packet_show_sock(addr, nlh, arg);
-	case AF_NETLINK:
-		return netlink_show_sock(addr, nlh, arg);
-	default:
-		return -1;
-	}
-}
-
-static int handle_follow_request(struct filter *f)
-{
-	int ret = -1;
-	int groups = 0;
-	struct rtnl_handle rth;
-
-	if (f->families & (1 << AF_INET) && f->dbs & (1 << TCP_DB))
-		groups |= 1 << (SKNLGRP_INET_TCP_DESTROY - 1);
-	if (f->families & (1 << AF_INET) && f->dbs & (1 << UDP_DB))
-		groups |= 1 << (SKNLGRP_INET_UDP_DESTROY - 1);
-	if (f->families & (1 << AF_INET6) && f->dbs & (1 << TCP_DB))
-		groups |= 1 << (SKNLGRP_INET6_TCP_DESTROY - 1);
-	if (f->families & (1 << AF_INET6) && f->dbs & (1 << UDP_DB))
-		groups |= 1 << (SKNLGRP_INET6_UDP_DESTROY - 1);
-
-	if (groups == 0)
-		return -1;
-
-	if (rtnl_open_byproto(&rth, groups, NETLINK_SOCK_DIAG))
-		return -1;
-
-	rth.dump = 0;
-	rth.local.nl_pid = 0;
-
-	if (rtnl_dump_filter(&rth, generic_show_sock, f))
-		goto Exit;
-
-	ret = 0;
-Exit:
-	rtnl_close(&rth);
-	return ret;
-}
 
 int c_main(int argc, char *argv[])
 {
@@ -3113,17 +2493,10 @@ int c_main(int argc, char *argv[])
 
 	fflush(stdout);
 
-	if (follow_events)
-		exit(handle_follow_request(&current_filter));
-
 	if (current_filter.dbs & (1<<NETLINK_DB))
 		netlink_show(&current_filter);
-	if (current_filter.dbs & PACKET_DBM)
-		packet_show(&current_filter);
 	if (current_filter.dbs & UNIX_DBM)
 		unix_show(&current_filter);
-	if (current_filter.dbs & (1<<RAW_DB))
-		raw_show(&current_filter);
 	if (current_filter.dbs & (1<<UDP_DB))
 		udp_show(&current_filter);
 	if (current_filter.dbs & (1<<TCP_DB))
