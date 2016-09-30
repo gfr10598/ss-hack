@@ -280,25 +280,6 @@ static FILE *generic_proc_open(const char *env, const char *name)
 	return fopen(p, "r");
 }
 
-static FILE *net_tcp_open(void)
-{
-	return generic_proc_open("PROC_NET_TCP", "net/tcp");
-}
-
-static FILE *net_tcp6_open(void)
-{
-	return generic_proc_open("PROC_NET_TCP6", "net/tcp6");
-}
-
-static FILE *net_udp_open(void)
-{
-	return generic_proc_open("PROC_NET_UDP", "net/udp");
-}
-
-static FILE *net_udp6_open(void)
-{
-	return generic_proc_open("PROC_NET_UDP6", "net/udp6");
-}
 
 static FILE *net_raw_open(void)
 {
@@ -325,11 +306,6 @@ static FILE *net_netlink_open(void)
 	return generic_proc_open("PROC_NET_NETLINK", "net/netlink");
 }
 
-static FILE *slabinfo_open(void)
-{
-	return generic_proc_open("PROC_SLABINFO", "slabinfo");
-}
-
 static FILE *ephemeral_ports_open(void)
 {
 	return generic_proc_open("PROC_IP_LOCAL_PORT_RANGE", "sys/net/ipv4/ip_local_port_range");
@@ -340,70 +316,6 @@ enum entry_types {
 	PROC_CTX,
 	PROC_SOCK_CTX
 };
-
-
-/* Get stats from slab */
-
-struct slabstat {
-	int socks;
-	int tcp_ports;
-	int tcp_tws;
-	int tcp_syns;
-	int skbs;
-};
-
-static struct slabstat slabstat;
-
-static const char *slabstat_ids[] = {
-
-	"sock",
-	"tcp_bind_bucket",
-	"tcp_tw_bucket",
-	"tcp_open_request",
-	"skbuff_head_cache",
-};
-
-static int get_slabstat(struct slabstat *s)
-{
-	char buf[256];
-	FILE *fp;
-	int cnt;
-	static int slabstat_valid;
-
-	if (slabstat_valid)
-		return 0;
-
-	memset(s, 0, sizeof(*s));
-
-	fp = slabinfo_open();
-	if (!fp)
-		return -1;
-
-	cnt = sizeof(*s)/sizeof(int);
-
-	if (!fgets(buf, sizeof(buf), fp)) {
-		fclose(fp);
-		return -1;
-	}
-	while (fgets(buf, sizeof(buf), fp) != NULL) {
-		int i;
-
-		for (i = 0; i < ARRAY_SIZE(slabstat_ids); i++) {
-			if (memcmp(buf, slabstat_ids[i], strlen(slabstat_ids[i])) == 0) {
-				sscanf(buf, "%*s%d", ((int *)s) + i);
-				cnt--;
-				break;
-			}
-		}
-		if (cnt <= 0)
-			break;
-	}
-
-	slabstat_valid = 1;
-
-	fclose(fp);
-	return 0;
-}
 
 static unsigned long long cookie_sk_get(const uint32_t *cookie)
 {
@@ -1553,101 +1465,7 @@ static void tcp_timer_print(struct tcpstat *s)
 	}
 }
 
-static int tcp_show_data(char *loc, char* rem, char* data, const struct filter *f, int family)
-{
-	int rto = 0, ato = 0;
-	struct tcpstat s = {};
-	char opt[256];
-	int n;
-	int hz = get_user_hz();
-
-        // Hex(?) state value, e.g. C:
-	int state = (data[1] >= 'A') ? (data[1] - 'A' + 10) : (data[1] - '0');
-
-        // Filter out any states we don't care about.
-	if (!(f->states & (1 << state)))
-		return 0;
-
-	proc_parse_inet_addr(loc, rem, family, &s.ss);
-
-	if (f->f && run_ssfilter(f->f, &s.ss) == 0)
-		return 0;
-
-	opt[0] = 0;
-	n = sscanf(data, "%x %x:%x %x:%x %x %d %d %u %d %llx %d %d %d %u %d %[^\n]\n",
-		   &s.ss.state, &s.ss.wq, &s.ss.rq,
-		   &s.timer, &s.timeout, &s.retrans, &s.ss.uid, &s.probes,
-		   &s.ss.ino, &s.ss.refcnt, &s.ss.sk, &rto, &ato, &s.qack, &s.cwnd,
-		   &s.ssthresh, opt);
-
-	if (n < 17)
-		opt[0] = 0;
-
-	if (n < 12) {
-		rto = 0;
-		s.cwnd = 2;
-		s.ssthresh = -1;
-		ato = s.qack = 0;
-	}
-
-	s.retrans   = s.timer != 1 ? s.probes : s.retrans;
-	s.timeout   = (s.timeout * 1000 + hz - 1) / hz;
-	s.ato	    = (double)ato / hz;
-	s.qack	   /= 2;
-	s.rto	    = (double)rto;
-	s.ssthresh  = s.ssthresh == -1 ? 0 : s.ssthresh;
-	s.rto	    = s.rto != 3 * hz  ? s.rto / hz : 0;
-
-        printf("%s ::: ", data);
-
-	inet_stats_print(&s.ss, IPPROTO_TCP);  // OUTPUT
-
-	if (show_options)
-		tcp_timer_print(&s);
-
-	if (show_details) {
-		sock_details_print(&s.ss);
-		if (opt[0])
-			printf(" opt:\"%s\"", opt);
-	}
-
-	if (show_tcpinfo)
-		tcp_stats_print(&s);  // OUTPUT
-
-	printf("\n");  // OUTPUT
-	return 0;
-}
-
 int stash_data(char *loc, char* rem, char* data, int family);
-
-// GFR: For each connection, we need to capture its data and save it, and mark
-// it as updated.  Then, we need to go through all entries that were NOT
-// updated, and output them.
-static int tcp_show_line(char *line, const struct filter *f, int family)
-{
-	char *loc, *rem, *data;
-
-	if (proc_inet_split_line(line, &loc, &rem, &data))
-		return -1;
-
-        // Hex(?) state value, e.g. C:
-	int state = (data[1] >= 'A') ? (data[1] - 'A' + 10) : (data[1] - '0');
-
-        // Filter out any states we don't care about.
-	if (!(f->states & (1 << state)))
-		return 0;
-
-        // Filter out any other lines we don't care about.
-	struct sockstat ss = {};
-	proc_parse_inet_addr(loc, rem, family, &ss);
-
-	if (f->f && run_ssfilter(f->f, &ss) == 0)
-		return 0;
-
-        stash_data(loc, rem, data, family);
-
-        return tcp_show_data(loc, rem, data, f, family);
-}
 
 static int generic_record_read(FILE *fp,
 			       int (*worker)(char*, const struct filter *, int),
@@ -2271,10 +2089,6 @@ static int tcp_show_netlink_file(struct filter *f)
 
 static int tcp_show(struct filter *f, int socktype)
 {
-	FILE *fp = NULL;
-	char *buf = NULL;
-	int bufsize = 64*1024;
-
 	if (!filter_af_get(f, AF_INET) && !filter_af_get(f, AF_INET6)) {
                 printf("AF_INET path:\n");
 		return 0;
@@ -2291,68 +2105,8 @@ static int tcp_show(struct filter *f, int socktype)
 		return 0;
         }
 
-	/* Sigh... We have to parse /proc/net/tcp... */
-
-	/* Estimate amount of sockets and try to allocate
-	 * huge buffer to read all the table at one read.
-	 * Limit it by 16MB though. The assumption is: as soon as
-	 * kernel was able to hold information about N connections,
-	 * it is able to give us some memory for snapshot.
-	 */
-	if (1) {
-		get_slabstat(&slabstat);
-
-		int guess = slabstat.socks+slabstat.tcp_syns;
-
-		if (f->states&(1<<SS_TIME_WAIT))
-			guess += slabstat.tcp_tws;
-		if (guess > (16*1024*1024)/128)
-			guess = (16*1024*1024)/128;
-		guess *= 128;
-		if (guess > bufsize)
-			bufsize = guess;
-	}
-	while (bufsize >= 64*1024) {
-		if ((buf = malloc(bufsize)) != NULL)
-			break;
-		bufsize /= 2;
-	}
-	if (buf == NULL) {
-		errno = ENOMEM;
-		return -1;
-	}
-
-	if (f->families & (1<<AF_INET)) {
-		if ((fp = net_tcp_open()) == NULL)
-			goto outerr;
-
-		setbuffer(fp, buf, bufsize);
-		if (generic_record_read(fp, tcp_show_line, f, AF_INET))
-			goto outerr;
-		fclose(fp);
-	}
-
-	if ((f->families & (1<<AF_INET6)) &&
-	    (fp = net_tcp6_open()) != NULL) {
-		setbuffer(fp, buf, bufsize);
-		if (generic_record_read(fp, tcp_show_line, f, AF_INET6))
-			goto outerr;
-		fclose(fp);
-	}
-
-	free(buf);
-	return 0;
-
-outerr:
-	do {
-		int saved_errno = errno;
-
-		free(buf);
-		if (fp)
-			fclose(fp);
-		errno = saved_errno;
-		return -1;
-	} while (0);
+        fprintf(stderr, "Turns out we need this backup code in tcp_show after all!\n");
+        exit(1);
 }
 
 
@@ -2412,8 +2166,6 @@ static int udp_show(struct filter *f)
     fprintf(stderr, "udp_show\n");
   }
 
-	FILE *fp = NULL;
-
 	if (!filter_af_get(f, AF_INET) && !filter_af_get(f, AF_INET6))
 		return 0;
 
@@ -2423,31 +2175,8 @@ static int udp_show(struct filter *f)
 	    && inet_show_netlink(f, NULL, IPPROTO_UDP) == 0)
 		return 0;
 
-	if (f->families&(1<<AF_INET)) {
-		if ((fp = net_udp_open()) == NULL)
-			goto outerr;
-		if (generic_record_read(fp, dgram_show_line, f, AF_INET))
-			goto outerr;
-		fclose(fp);
-	}
-
-	if ((f->families&(1<<AF_INET6)) &&
-	    (fp = net_udp6_open()) != NULL) {
-		if (generic_record_read(fp, dgram_show_line, f, AF_INET6))
-			goto outerr;
-		fclose(fp);
-	}
-	return 0;
-
-outerr:
-	do {
-		int saved_errno = errno;
-
-		if (fp)
-			fclose(fp);
-		errno = saved_errno;
-		return -1;
-	} while (0);
+        fprintf(stderr, "Turns out we need this backup code in tcp_show after all!\n");
+        exit(1);
 }
 
 static int raw_show(struct filter *f)
@@ -2465,6 +2194,7 @@ static int raw_show(struct filter *f)
 
 	dg_proto = RAW_PROTO;
 
+        fprintf(stderr, "Hmm....\n");
 	if (f->families&(1<<AF_INET)) {
 		if ((fp = net_raw_open()) == NULL)
 			goto outerr;
