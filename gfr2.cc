@@ -6,6 +6,7 @@
 #include <string>
 #include <unordered_map>
 #include <functional>
+//#include <hash_bytes.h>
 
 extern "C" void foobar();
 extern "C" int c_main(int argc, char* argv[]);
@@ -68,16 +69,24 @@ class ConnectionTracker {
     }
     ++round_;  // Don't care about wrapping.
   }
+
+  size_t size() const {
+    return connections_.size();
+  }
+
  private:
   // TODO(gfr) Consider having separate map for each family.
   ConnectionMap connections_;
   int round_ = 0;
 };
 
+static ConnectionTracker g_tracker;
+
 extern "C"
-int stash_data(char *loc, char* rem, char* data, int family) {
-//  static ConnectionTracker tracker;
-//  tracker.StashData(loc, rem, family, data);
+void stash_data(char *loc, char* rem, char* data, int family);
+
+void stash_data(char *loc, char* rem, char* data, int family) {
+  g_tracker.StashData(loc, rem, family, data);
   std::printf(".");
 }
 
@@ -87,5 +96,8 @@ void foobar() {
 
 
 int main(int argc, char* argv[]) {
-  return c_main(argc, argv);
+  //g_tracker.StashData("l", "r", 0, "foobar");
+  int r = c_main(argc, argv);
+  fprintf(stderr, "map has %lu entries.\n", g_tracker.size());
+  return r;
 }

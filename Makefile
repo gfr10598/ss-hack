@@ -1,4 +1,4 @@
-CXXFLAGS=-std=c++11
+CXXFLAGS= $(WXXFLAGS) -std=c++11 -pthread
 
 SSOBJ=ss.o ssfilter.o
 GFROBJ=gfr.o ssfilter.o gfr2.o
@@ -6,7 +6,9 @@ LNSTATOBJ=lnstat.o lnstat_util.o
 
 TARGETS=gfr ss nstat ifstat rtacct lnstat
 
+# Config defined CC, so we override below.
 include ../Config
+CC := g++
 
 ifeq ($(HAVE_BERKELEY_DB),y)
 	TARGETS += arpd
@@ -24,7 +26,7 @@ endif
 all: $(TARGETS)
 
 gfr: $(GFROBJ)
-	$(QUIET_LINK)$(CC) $^ $(LDFLAGS) $(LDLIBS) -o $@
+	$(QUIET_LINK)$(CC) $^ $(LDFLAGS) $(LDLIBS) $(LOADLIBES) -std=c++11 -o $@
 
 ss: $(SSOBJ)
 	$(QUIET_LINK)$(CC) $^ $(LDFLAGS) $(LDLIBS) -o $@

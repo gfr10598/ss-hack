@@ -1,3 +1,5 @@
+// TODO(gfr) separate out printing code from collection code.
+
 /*
  * ss.c		"sockstat", socket statistics
  *
@@ -1377,7 +1379,7 @@ static void tcp_timer_print(struct tcpstat *s)
 	}
 }
 
-int stash_data(char *loc, char* rem, char* data, int family);
+void stash_data(char *loc, char* rem, char* data, int family);
 
 static void print_skmeminfo(struct rtattr *tb[], int attrtype)
 {
