@@ -632,8 +632,10 @@ static int unix_match(const inet_prefix *a, const inet_prefix *p)
 	return !fnmatch(pattern, addr, 0);
 }
 
+#if 0
 static int run_ssfilter(struct ssfilter *f, struct sockstat *s)
 {
+  fprintf(stderr, "%4d run_ssfilter.\n",__LINE__);
 	switch (f->type) {
 		case SSF_S_AUTO:
 	{
@@ -732,7 +734,7 @@ static int run_ssfilter(struct ssfilter *f, struct sockstat *s)
 		abort();
 	}
 }
-
+#endif
 /* Relocate external jumps by reloc. */
 static void ssfilter_patch(char *a, int len, int reloc)
 {
@@ -1822,8 +1824,10 @@ static int show_one_inet_sock(const struct sockaddr_nl *addr,
 
 	parse_diag_msg(h, &s);
 
+#if 0
 	if (diag_arg->f->f && run_ssfilter(diag_arg->f->f, &s) == 0)
 		return 0;
+#endif
 
 	if (diag_arg->f->kill && kill_inet_sock(h, arg) != 0) {
 		if (errno == EOPNOTSUPP || errno == ENOENT) {
@@ -1965,8 +1969,10 @@ static int tcp_show_netlink_file(struct filter *f)
 
 		parse_diag_msg(h, &s);
 
+#if 0
 		if (f && f->f && run_ssfilter(f->f, &s) == 0)
 			continue;
+#endif
 
 		err = inet_show_sock(h, &s, IPPROTO_TCP);
 		if (err < 0)
@@ -2086,6 +2092,7 @@ static void unix_stats_print(struct sockstat *list, struct filter *f)
 			}
 		}
 
+#if 0
 		if (use_proc && f->f) {
 			struct sockstat st = {
 				.local.family = AF_UNIX,
@@ -2098,6 +2105,7 @@ static void unix_stats_print(struct sockstat *list, struct filter *f)
 			if (run_ssfilter(f->f, &st) == 0)
 				continue;
 		}
+#endif
 
 		sock_state_print(s, unix_netid_name(s->type));
 
@@ -2160,8 +2168,10 @@ static int unix_show_sock(const struct sockaddr_nl *addr, struct nlmsghdr *nlh,
 	if (tb[UNIX_DIAG_PEER])
 		stat.rport = rta_getattr_u32(tb[UNIX_DIAG_PEER]);
 
+#if 0
 	if (f->f && run_ssfilter(f->f, &stat) == 0)
 		return 0;
+#endif
 
         // STASH DATA HERE.  (200 bytes)
 	unix_stats_print(&stat, f);
@@ -2261,6 +2271,7 @@ static int netlink_show_one(struct filter *f,
 	st.rq	 = rq;
 	st.wq	 = wq;
 
+#if 0
 	if (f->f) {
 		st.local.family = AF_NETLINK;
 		st.remote.family = AF_NETLINK;
@@ -2270,7 +2281,7 @@ static int netlink_show_one(struct filter *f,
 		if (run_ssfilter(f->f, &st) == 0)
 			return 1;
 	}
-
+#endif
 	sock_state_print(&st, "nl");
 
 	if (resolve_services)

@@ -8,7 +8,7 @@ TARGETS=gfr ss nstat ifstat rtacct lnstat
 
 # Config defined CC, so we override below.
 include ../Config
-CC := g++
+CXX := g++
 
 ifeq ($(HAVE_BERKELEY_DB),y)
 	TARGETS += arpd
@@ -26,7 +26,7 @@ endif
 all: $(TARGETS)
 
 gfr: $(GFROBJ)
-	$(QUIET_LINK)$(CC) $^ $(LDFLAGS) $(LDLIBS) $(LOADLIBES) -std=c++11 -o $@
+	$(QUIET_LINK)$(CXX) $^ $(LDFLAGS) $(LDLIBS) $(LOADLIBES) -std=c++11 -o $@
 
 ss: $(SSOBJ)
 	$(QUIET_LINK)$(CC) $^ $(LDFLAGS) $(LDLIBS) -o $@
