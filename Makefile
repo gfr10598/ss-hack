@@ -25,6 +25,10 @@ endif
 
 all: $(TARGETS)
 
+gfr.o: structs.h gfr.c
+
+gfr2.o: structs.h gfr2.cc
+
 gfr: $(GFROBJ)
 	$(QUIET_LINK)$(CXX) $^ $(LDFLAGS) $(LDLIBS) $(LOADLIBES) -std=c++11 -o $@
 

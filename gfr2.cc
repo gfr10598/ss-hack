@@ -60,7 +60,6 @@ class ConnectionTracker {
   // Iterate through the map, find any items that are from previous
   // round, and take action on them.
   void FinishRound() {
-    fprintf(stderr, "map has %lu entries.\n", size());
     long ignored = 0;
     long erased = 0;
     for (auto it = connections_.begin(); it != connections_.end(); ++it) {
@@ -73,9 +72,9 @@ class ConnectionTracker {
       }
     }
     ++round_;  // Don't care about wrapping.
+    fprintf(stderr, "map has %lu entries.\n", size());
     fprintf(stderr, "Total kept: %ld\n", ignored);
     fprintf(stderr, "Total erased: %ld\n", erased);
-    fprintf(stderr, "map has %lu entries.\n", size());
   }
 
   size_t size() const {

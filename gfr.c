@@ -15,41 +15,27 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <syslog.h>
-#include <fcntl.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
-#include <sys/uio.h>
 #include <netinet/in.h>
 #include <string.h>
 #include <errno.h>
 #include <netdb.h>
 #include <arpa/inet.h>
-#include <dirent.h>
-#include <fnmatch.h>
-#include <getopt.h>
-#include <stdbool.h>
-#include <limits.h>
 
 #include "utils.h"
 #include "rt_names.h"
-#include "ll_map.h"
 #include "libnetlink.h"
-#include "namespace.h"
-#include "SNAPSHOT.h"
 
-#include <linux/tcp.h>
-#include <linux/sock_diag.h>
-#include <linux/inet_diag.h>
-#include <linux/unix_diag.h>
-#include <linux/netdevice.h>	/* for MAX_ADDR_LEN */
-#include <linux/filter.h>
-#include <linux/packet_diag.h>
-#include <linux/netlink_diag.h>
+//#include <linux/tcp.h>
+//#include <linux/sock_diag.h>
+//#include <linux/inet_diag.h>
+//#include <linux/unix_diag.h>
+//#include <linux/filter.h>
+//#include <linux/netlink_diag.h>
 
 #include "structs.h"
 
-#define SUPPRESS 0
 #define STASH_DATA 0
 
 int resolve_hosts;
@@ -384,44 +370,6 @@ void *parse_markmask(const char *markmask)
 
 void stash_data(char *loc, char* rem, char* data, int family);
 
-// Use this as template to extract the info we need from nlh, to stash
-// away for future printing.
-// TODO also look at netlink APIs for more information.
-static void parse_diag_msg(struct nlmsghdr *nlh, struct sockstat *s)
-{
-	struct rtattr *tb[INET_DIAG_MAX+1];
-	struct inet_diag_msg *r = NLMSG_DATA(nlh);
-
-	parse_rtattr(tb, INET_DIAG_MAX, (struct rtattr *)(r+1),
-		     nlh->nlmsg_len - NLMSG_LENGTH(sizeof(*r)));
-
-	s->state	= r->idiag_state;
-  // We need this to determine the number of bytes in the addresses.
-	s->local.family	= s->remote.family = r->idiag_family;
-	s->lport	= ntohs(r->id.idiag_sport);
-	s->rport	= ntohs(r->id.idiag_dport);
-	s->wq		= r->idiag_wqueue;
-	s->rq		= r->idiag_rqueue;
-	s->ino		= r->idiag_inode;
-	s->uid		= r->idiag_uid;
-	s->iface	= r->id.idiag_if;
-//	s->sk		= cookie_sk_get(&r->id.idiag_cookie[0]);
-
-  // Probably don't need this
-	s->mark = 0;
-	if (tb[INET_DIAG_MARK])
-		s->mark = *(__u32 *) RTA_DATA(tb[INET_DIAG_MARK]);
-
-	if (s->local.family == AF_INET)
-		s->local.bytelen = s->remote.bytelen = 4;
-	else
-		s->local.bytelen = s->remote.bytelen = 16;
-
-  // XXX
-	memcpy(s->local.data, r->id.idiag_src, s->local.bytelen);
-	memcpy(s->remote.data, r->id.idiag_dst, s->local.bytelen);
-}
-
 // External
 void stash_data_internal(int family,
                          const struct inet_diag_sockid id,
@@ -593,12 +541,6 @@ static int kill_inet_sock(struct nlmsghdr *h, void *arg)
 // misc/gfr -t -i -H -e -u -x -a -m
 static int inet_show_netlink(struct filter *f, FILE *dump_fp, int protocol)
 {
-  if (SUPPRESS) {
-    fprintf(stderr, "inet_show_netlink suppressed.\n");
-    return 0;
-  } else {
-    fprintf(stderr, "inet_show_netlink\n");
-  }
   fprintf(stderr, "protocol = %d\n", protocol);  // TCP is 6
 	int err = 0;
 	struct rtnl_handle rth, rth2;
@@ -667,13 +609,6 @@ static int tcp_show(struct filter *f, int socktype)
 
 static int udp_show(struct filter *f)
 {
-  if (SUPPRESS) {
-    fprintf(stderr, "udp_show suppressed\n");
-    return 0;
-  } else {
-    fprintf(stderr, "udp_show\n");
-  }
-
 	if (!filter_af_get(f, AF_INET) && !filter_af_get(f, AF_INET6)) {
     fprintf(stderr, "%4d Filtered.\n", __LINE__);
 		return 0;
@@ -696,7 +631,6 @@ int unix_state_map[] = { SS_CLOSE, SS_SYN_SENT,
 static int handle_netlink_request(struct filter *f, struct nlmsghdr *req,
 		size_t size, rtnl_filter_t show_one_sock)
 {
-  fprintf(stderr, "handle_netlink_request.\n");  // We see this once.
 	int ret = -1;
 	struct rtnl_handle rth;
 
@@ -714,7 +648,6 @@ static int handle_netlink_request(struct filter *f, struct nlmsghdr *req,
 	ret = 0;
 Exit:
 	rtnl_close(&rth);
-  fprintf(stderr, "handle_netlink_request complete.\n");
 	return ret;
 }
 
@@ -729,7 +662,6 @@ static int unix_show_netlink(struct filter *f)
 	req.r.udiag_show |= UDIAG_SHOW_MEMINFO;
 
   // INTERCEPT ALL OF THE line printers.
-  fprintf(stderr, "Calling handle_netlink_request. %d\n", __LINE__);
   // TODO - how do we figure out how to interpret this later, without the
   // implicit info in the call to unix_show_sock?
 	return handle_netlink_request(f, &req.nlh, sizeof(req), stash_indirect /*unix_show_sock*/);
@@ -738,15 +670,6 @@ static int unix_show_netlink(struct filter *f)
 // With environment variables set, all the output comes from here.
 static int unix_show(struct filter *f)
 {
-  if (SUPPRESS) {
-    // This shows about 1/4 of the content.
-    static int count = 0;
-    count++;
-    if (count % 40 == 0)
-    fprintf(stderr, "unix_show suppressed\n");
-    return 0;
-  }
-
 	if (!filter_af_get(f, AF_UNIX))
 		return 0;
 
