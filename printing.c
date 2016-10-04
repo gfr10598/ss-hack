@@ -1,5 +1,67 @@
 
 #include "structs.h"
+
+int netid_width;
+int state_width;
+int addrp_width;
+int addr_width;
+int serv_width;
+int screen_width;
+
+static const char *sstate_name[] = {
+	"UNKNOWN",
+	[SS_ESTABLISHED] = "ESTAB",
+	[SS_SYN_SENT] = "SYN-SENT",
+	[SS_SYN_RECV] = "SYN-RECV",
+	[SS_FIN_WAIT1] = "FIN-WAIT-1",
+	[SS_FIN_WAIT2] = "FIN-WAIT-2",
+	[SS_TIME_WAIT] = "TIME-WAIT",
+	[SS_CLOSE] = "UNCONN",
+	[SS_CLOSE_WAIT] = "CLOSE-WAIT",
+	[SS_LAST_ACK] = "LAST-ACK",
+	[SS_LISTEN] =	"LISTEN",
+	[SS_CLOSING] = "CLOSING",
+};
+
+static void sock_state_print(struct sockstat *s, const char *sock_name)
+{
+	if (netid_width)
+		printf("%-*s ", netid_width, sock_name);
+	if (state_width)
+		printf("%-*s ", state_width, sstate_name[s->state]);
+
+	printf("%-6d %-6d ", s->rq, s->wq);
+}
+
+static void sock_details_print(struct sockstat *s)
+{
+	if (s->uid)
+		printf(" uid:%u", s->uid);
+
+	printf(" ino:%u", s->ino);
+	printf(" sk:%llx", s->sk);
+
+	if (s->mark)
+		printf(" fwmark:0x%x", s->mark);
+}
+
+static void sock_addr_print_width(int addr_len, const char *addr, char *delim,
+		int port_len, const char *port, const char *ifname)
+{
+	if (ifname) {
+		printf("%*s%%%s%s%-*s ", addr_len, addr, ifname, delim,
+				port_len, port);
+	} else {
+		printf("%*s%s%-*s ", addr_len, addr, delim, port_len, port);
+	}
+}
+
+static void sock_addr_print(const char *addr, char *delim, const char *port,
+		const char *ifname)
+{
+	sock_addr_print_width(addr_width, addr, delim, serv_width, port, ifname);
+}
+
 #if 0
 static int netid_width;
 static int state_width;

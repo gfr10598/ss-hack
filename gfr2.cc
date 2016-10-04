@@ -103,14 +103,13 @@ extern "C"
 void stash_data_internal(int family,
                          const struct inet_diag_sockid id,
                          const struct nlmsghdr *nlh) {
-  // TODO - are there other possible lengths we need to worry about?
   size_t key = id.idiag_sport;
   hash_combine(key, id.idiag_dport);
-	int words = (family == AF_INET) ? 1 : 4;
+  // TODO - are there other possible lengths we need to worry about?
+  int words = (family == AF_INET) ? 1 : 4;
   for (int word = 0; word < words; ++word) {
     hash_combine(key, id.idiag_dport, id.idiag_src[word], id.idiag_dst[word]);
   }
-  // TODO data
   std::string data(reinterpret_cast<const char*>(nlh), NLMSG_PAYLOAD(nlh, 0));
   g_tracker.StashData(key, std::move(data));
 }

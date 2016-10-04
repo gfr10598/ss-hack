@@ -4,7 +4,7 @@ SSOBJ=ss.o ssfilter.o
 GFROBJ=gfr.o ssfilter.o gfr2.o
 LNSTATOBJ=lnstat.o lnstat_util.o
 
-TARGETS=gfr ss nstat ifstat rtacct lnstat
+TARGETS=gfr ss nstat ifstat rtacct lnstat printing.o
 
 # Config defined CC, so we override below.
 include ../Config
