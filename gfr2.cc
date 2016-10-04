@@ -43,19 +43,18 @@ struct hash<Connection> {
 }  // namespace std
 
 class ConnectionTracker {
-  using ConnectionMap = std::unordered_map<Connection, std::pair<int, std::string>>;
+  using ConnectionMap = std::unordered_map<size_t, std::pair<int, std::string>>;
  public:
   // Locate appropriate connection entry, swap its data, and update
   // its round.
-  void StashData(char* local, char* remote, int family, char* data) {
-    Connection c{local, remote, family};
-    auto entry = connections_[c];
+  void StashData(size_t key, char* data) {
+    auto entry = connections_[key];
     entry.first = round_;
     entry.second = data;
   }
 
   void OutputItem(const ConnectionMap::value_type& value) {
-    std::printf("%s", value.first.local_addr.c_str());
+//    std::printf("%s", value.first.local_addr.c_str());
   }
 
   // Iterate through the map, find any items that are from previous
@@ -82,18 +81,31 @@ class ConnectionTracker {
 
 static ConnectionTracker g_tracker;
 
-extern "C"
-void stash_data(char *loc, char* rem, char* data, int family);
-
-void stash_data(char *loc, char* rem, char* data, int family) {
-  g_tracker.StashData(loc, rem, family, data);
-  std::printf(".");
-}
 
 void foobar() {
   std::fprintf(stderr, "Hello world.\n");
 }
 
+#include "structs.h"
+
+extern "C"
+void stash_data_internal(int family,
+                         const struct inet_diag_sockid id,
+                         const struct nlmsghdr *nlh);
+
+void stash_data_internal(int family,
+                         const struct inet_diag_sockid id,
+                         const struct nlmsghdr *nlh) {
+  // TODO - are there other possible lengths we need to worry about?
+  size_t key = id.idiag_sport;
+  hash_combine(key, id.idiag_dport);
+	int words = (family == AF_INET) ? 1 : 4;
+  for (int word = 0; word < words; ++word) {
+    hash_combine(key, id.idiag_dport, id.idiag_src[word], id.idiag_dst[word]);
+  }
+  // TODO data
+  g_tracker.StashData(key, "data");
+}
 
 int main(int argc, char* argv[]) {
   //g_tracker.StashData("l", "r", 0, "foobar");
