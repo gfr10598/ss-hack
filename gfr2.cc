@@ -47,10 +47,10 @@ class ConnectionTracker {
  public:
   // Locate appropriate connection entry, swap its data, and update
   // its round.
-  void StashData(size_t key, char* data) {
-    auto entry = connections_[key];
+  void StashData(size_t key, std::string data) {
+    auto& entry = connections_[key];
     entry.first = round_;
-    entry.second = data;
+    entry.second.swap(data);
   }
 
   void OutputItem(const ConnectionMap::value_type& value) {
@@ -60,13 +60,22 @@ class ConnectionTracker {
   // Iterate through the map, find any items that are from previous
   // round, and take action on them.
   void FinishRound() {
+    fprintf(stderr, "map has %lu entries.\n", size());
+    long ignored = 0;
+    long erased = 0;
     for (auto it = connections_.begin(); it != connections_.end(); ++it) {
       if (it->second.first != round_) {
         OutputItem(*it);
+        erased += it->second.second.size();
         connections_.erase(it);
+      } else {
+        ignored += it->second.second.size();
       }
     }
     ++round_;  // Don't care about wrapping.
+    fprintf(stderr, "Total kept: %ld\n", ignored);
+    fprintf(stderr, "Total erased: %ld\n", erased);
+    fprintf(stderr, "map has %lu entries.\n", size());
   }
 
   size_t size() const {
@@ -91,10 +100,6 @@ void foobar() {
 extern "C"
 void stash_data_internal(int family,
                          const struct inet_diag_sockid id,
-                         const struct nlmsghdr *nlh);
-
-void stash_data_internal(int family,
-                         const struct inet_diag_sockid id,
                          const struct nlmsghdr *nlh) {
   // TODO - are there other possible lengths we need to worry about?
   size_t key = id.idiag_sport;
@@ -104,12 +109,12 @@ void stash_data_internal(int family,
     hash_combine(key, id.idiag_dport, id.idiag_src[word], id.idiag_dst[word]);
   }
   // TODO data
-  g_tracker.StashData(key, "data");
+  std::string data(reinterpret_cast<const char*>(nlh), NLMSG_PAYLOAD(nlh, 0));
+  g_tracker.StashData(key, std::move(data));
 }
 
 int main(int argc, char* argv[]) {
-  //g_tracker.StashData("l", "r", 0, "foobar");
   int r = c_main(argc, argv);
-  fprintf(stderr, "map has %lu entries.\n", g_tracker.size());
+  g_tracker.FinishRound();
   return r;
 }
