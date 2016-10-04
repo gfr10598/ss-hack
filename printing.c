@@ -1,5 +1,12 @@
 
+#include <netdb.h>  // setservent
+
 #include "structs.h"
+
+#include <errno.h>
+#include "rt_names.h"
+
+int resolve_services = 1;
 
 int netid_width;
 int state_width;
@@ -7,6 +14,31 @@ int addrp_width;
 int addr_width;
 int serv_width;
 int screen_width;
+
+static const char *TCP_PROTO = "tcp";
+static const char *UDP_PROTO = "udp";
+static const char *RAW_PROTO = "raw";
+static const char *dg_proto;
+
+
+static FILE *generic_proc_open(const char *env, const char *name)
+{
+	const char *p = getenv(env);
+	char store[128];
+
+	if (!p) {
+		p = getenv("PROC_ROOT") ? : "/proc";
+		snprintf(store, sizeof(store)-1, "%s/%s", p, name);
+		p = store;
+	}
+
+	return fopen(p, "r");
+}
+
+static FILE *ephemeral_ports_open(void)
+{
+	return generic_proc_open("PROC_IP_LOCAL_PORT_RANGE", "sys/net/ipv4/ip_local_port_range");
+}
 
 static const char *sstate_name[] = {
 	"UNKNOWN",
@@ -62,11 +94,113 @@ static void sock_addr_print(const char *addr, char *delim, const char *port,
 	sock_addr_print_width(addr_width, addr, delim, serv_width, port, ifname);
 }
 
-#if 0
-static int netid_width;
-static int state_width;
-static int addr_width;
-static int serv_width;
+static const char *tmr_name[] = {
+	"off",
+	"on",
+	"keepalive",
+	"timewait",
+	"persist",
+	"unknown"
+};
+
+static const char *print_ms_timer(int timeout)
+{
+	static char buf[64];
+	int secs, msecs, minutes;
+
+	if (timeout < 0)
+		timeout = 0;
+	secs = timeout/1000;
+	minutes = secs/60;
+	secs = secs%60;
+	msecs = timeout%1000;
+	buf[0] = 0;
+	if (minutes) {
+		msecs = 0;
+		snprintf(buf, sizeof(buf)-16, "%dmin", minutes);
+		if (minutes > 9)
+			secs = 0;
+	}
+	if (secs) {
+		if (secs > 9)
+			msecs = 0;
+		sprintf(buf+strlen(buf), "%d%s", secs, msecs ? "." : "sec");
+	}
+	if (msecs)
+		sprintf(buf+strlen(buf), "%03dms", msecs);
+	return buf;
+}
+
+struct scache {
+	struct scache *next;
+	int port;
+	char *name;
+	const char *proto;
+};
+
+struct scache *rlist;
+
+static void init_service_resolver(void)
+{
+	char buf[128];
+	FILE *fp = popen("/usr/sbin/rpcinfo -p 2>/dev/null", "r");
+
+	if (!fp)
+		return;
+
+	if (!fgets(buf, sizeof(buf), fp)) {
+		pclose(fp);
+		return;
+	}
+	while (fgets(buf, sizeof(buf), fp) != NULL) {
+		unsigned int progn, port;
+		char proto[128], prog[128] = "rpc.";
+		struct scache *c;
+
+		if (sscanf(buf, "%u %*d %s %u %s",
+			   &progn, proto, &port, prog+4) != 4)
+			continue;
+
+		if (!(c = malloc(sizeof(*c))))
+			continue;
+
+		c->port = port;
+		c->name = strdup(prog);
+		if (strcmp(proto, TCP_PROTO) == 0)
+			c->proto = TCP_PROTO;
+		else if (strcmp(proto, UDP_PROTO) == 0)
+			c->proto = UDP_PROTO;
+		else
+			c->proto = NULL;
+		c->next = rlist;
+		rlist = c;
+	}
+	pclose(fp);
+}
+
+#if 1
+/* Even do not try default linux ephemeral port ranges:
+ * default /etc/services contains so much of useless crap
+ * wouldbe "allocated" to this area that resolution
+ * is really harmful. I shrug each time when seeing
+ * "socks" or "cfinger" in dumps.
+ */
+static int is_ephemeral(int port)
+{
+	static int min = 0, max;
+
+	if (!min) {
+		FILE *f = ephemeral_ports_open();
+
+		if (!f || fscanf(f, "%d %d", &min, &max) < 2) {
+			min = 1024;
+			max = 4999;
+		}
+		if (f)
+			fclose(f);
+	}
+	return port >= min && port <= max;
+}
 
 static const char *__resolve_service(int port)
 {
@@ -92,7 +226,7 @@ static const char *__resolve_service(int port)
 
 	return NULL;
 }
-
+#endif
 
 #define SCACHE_BUCKETS 1024
 static struct scache *cache_htab[SCACHE_BUCKETS];
@@ -143,44 +277,43 @@ do_numeric:
 	return buf;
 }
 
-static void sock_state_print(struct sockstat *s, const char *sock_name)
+static void inet_addr_print(const inet_prefix *a, int port, unsigned int ifindex)
 {
-	if (netid_width)
-		printf("%-*s ", netid_width, sock_name);
-	if (state_width)
-		printf("%-*s ", state_width, sstate_name[s->state]);
+	char buf[1024];
+	const char *ap = buf;
+	int est_len = addr_width;
+	const char *ifname = NULL;
 
-	printf("%-6d %-6d ", s->rq, s->wq);
-}
-
-static void sock_details_print(struct sockstat *s)
-{
-	if (s->uid)
-		printf(" uid:%u", s->uid);
-
-	printf(" ino:%u", s->ino);
-	printf(" sk:%llx", s->sk);
-
-	if (s->mark)
-		printf(" fwmark:0x%x", s->mark);
-}
-
-static void sock_addr_print_width(int addr_len, const char *addr, char *delim,
-		int port_len, const char *port, const char *ifname)
-{
-	if (ifname) {
-		printf("%*s%%%s%s%-*s ", addr_len, addr, ifname, delim,
-				port_len, port);
+	if (a->family == AF_INET) {
+		if (a->data[0] == 0) {
+			buf[0] = '*';
+			buf[1] = 0;
+		} else {
+			ap = format_host(AF_INET, 4, a->data);
+		}
 	} else {
-		printf("%*s%s%-*s ", addr_len, addr, delim, port_len, port);
+		ap = format_host(a->family, 16, a->data);
+		est_len = strlen(ap);
+		if (est_len <= addr_width)
+			est_len = addr_width;
+		else
+			est_len = addr_width + ((est_len-addr_width+3)/4)*4;
 	}
+
+	if (ifindex) {
+		ifname   = ll_index_to_name(ifindex);
+		est_len -= strlen(ifname) + 1;  /* +1 for percent char */
+		if (est_len < 0)
+			est_len = 0;
+	}
+
+	sock_addr_print_width(est_len, ap, ":", serv_width, resolve_service(port),
+			ifname);
 }
 
-static void sock_addr_print(const char *addr, char *delim, const char *port,
-		const char *ifname)
-{
-	sock_addr_print_width(addr_width, addr, delim, serv_width, port, ifname);
-}
+
+
+#if 0
 
 static bool unix_type_skip(struct sockstat *s, struct filter *f)
 {
@@ -426,7 +559,6 @@ static int unix_show_sock(const struct sockaddr_nl *addr, struct nlmsghdr *nlh,
 }
 #endif
 
-#if 0
 static char *proto_name(int protocol)
 {
 	switch (protocol) {
@@ -593,8 +725,7 @@ static void tcp_timer_print(struct tcpstat *s)
 				s->retrans);
 	}
 }
-#endif
-#if 0
+
 static void print_skmeminfo(struct rtattr *tb[], int attrtype)
 {
 	const __u32 *skmeminfo;
@@ -643,11 +774,6 @@ static void print_skmeminfo(struct rtattr *tb[], int attrtype)
 static void tcp_show_info(const struct nlmsghdr *nlh, struct inet_diag_msg *r,
 		struct rtattr *tb[])
 {
-  if (SUPPRESS) {
-    //LOG("tcp_show_info suppressed.\n");
-    fprintf(stderr, "tcp_show_info suppressed.\n");
-    return;
-  }
 	double rtt = 0;
 	struct tcpstat s = {};
 
@@ -772,5 +898,123 @@ static void tcp_show_info(const struct nlmsghdr *nlh, struct inet_diag_msg *r,
 		free(s.bbr_info);
 	}
 }
+
+static void parse_diag_msg(struct nlmsghdr *nlh, struct sockstat *s)
+{
+	struct rtattr *tb[INET_DIAG_MAX+1];
+	struct inet_diag_msg *r = NLMSG_DATA(nlh);
+
+	parse_rtattr(tb, INET_DIAG_MAX, (struct rtattr *)(r+1),
+		     nlh->nlmsg_len - NLMSG_LENGTH(sizeof(*r)));
+
+	s->state	= r->idiag_state;
+	s->local.family	= s->remote.family = r->idiag_family;
+	s->lport	= ntohs(r->id.idiag_sport);
+	s->rport	= ntohs(r->id.idiag_dport);
+	s->wq		= r->idiag_wqueue;
+	s->rq		= r->idiag_rqueue;
+	s->ino		= r->idiag_inode;
+	s->uid		= r->idiag_uid;
+	s->iface	= r->id.idiag_if;
+//	s->sk		= cookie_sk_get(&r->id.idiag_cookie[0]);
+
+	s->mark = 0;
+	if (tb[INET_DIAG_MARK])
+		s->mark = *(__u32 *) RTA_DATA(tb[INET_DIAG_MARK]);
+
+	if (s->local.family == AF_INET)
+		s->local.bytelen = s->remote.bytelen = 4;
+	else
+		s->local.bytelen = s->remote.bytelen = 16;
+
+	memcpy(s->local.data, r->id.idiag_src, s->local.bytelen);
+	memcpy(s->remote.data, r->id.idiag_dst, s->local.bytelen);
+}
+
+static int inet_show_sock(struct nlmsghdr *nlh,
+			  struct sockstat *s,
+			  int protocol)
+{
+	struct rtattr *tb[INET_DIAG_MAX+1];
+	struct inet_diag_msg *r = NLMSG_DATA(nlh);
+
+	parse_rtattr(tb, INET_DIAG_MAX, (struct rtattr *)(r+1),
+		     nlh->nlmsg_len - NLMSG_LENGTH(sizeof(*r)));
+
+	if (tb[INET_DIAG_PROTOCOL])
+		protocol = *(__u8 *)RTA_DATA(tb[INET_DIAG_PROTOCOL]);
+
+	inet_stats_print(s, protocol);
+
+		struct tcpstat t = {};
+
+		t.timer = r->idiag_timer;
+		t.timeout = r->idiag_expires;
+		t.retrans = r->idiag_retrans;
+		tcp_timer_print(&t);
+
+		sock_details_print(s);
+		if (s->local.family == AF_INET6 && tb[INET_DIAG_SKV6ONLY]) {
+			unsigned char v6only;
+
+			v6only = *(__u8 *)RTA_DATA(tb[INET_DIAG_SKV6ONLY]);
+			printf(" v6only:%u", v6only);
+		}
+		if (tb[INET_DIAG_SHUTDOWN]) {
+			unsigned char mask;
+
+			mask = *(__u8 *)RTA_DATA(tb[INET_DIAG_SHUTDOWN]);
+			printf(" %c-%c", mask & 1 ? '-' : '<', mask & 2 ? '-' : '>');
+		}
+
+		printf("\n\t");
+		tcp_show_info(nlh, r, tb);
+
+	printf("\n");
+	return 0;
+}
+
+// TODO - do we really need this?
+struct inet_diag_arg {
+	struct filter *f;
+	int protocol;
+	struct rtnl_handle *rth;
+};
+
+static int show_one_inet_sock(const struct sockaddr_nl *addr,
+		struct nlmsghdr *h, void *arg)
+{
+	int err;
+	struct inet_diag_arg *diag_arg = arg;
+//	struct inet_diag_msg *r = NLMSG_DATA(h);
+	struct sockstat s = {};
+
+#if 0
+	if (!(diag_arg->f->families & (1 << r->idiag_family)))
+		return 0;
 #endif
+
+	parse_diag_msg(h, &s);
+
+#if 0
+	if (diag_arg->f->f && run_ssfilter(diag_arg->f->f, &s) == 0)
+		return 0;
+
+	if (diag_arg->f->kill && kill_inet_sock(h, arg) != 0) {
+		if (errno == EOPNOTSUPP || errno == ENOENT) {
+			/* Socket can't be closed, or is already closed. */
+			return 0;
+		} else {
+			perror("SOCK_DESTROY answers");
+			return -1;
+		}
+	}
+#endif
+
+	err = inet_show_sock(h, &s, diag_arg->protocol);
+	if (err < 0)
+		return err;
+
+	return 0;
+}
 
