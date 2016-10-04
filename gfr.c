@@ -70,9 +70,6 @@ int resolve_hosts;
 static int resolve_services = 1;
 int preferred_family = AF_UNSPEC;
 static int show_options;
-int show_details;
-static int show_mem;
-static int show_tcpinfo;
 static int show_header = 1;
 
 static int netid_width;
@@ -870,13 +867,12 @@ static void tcp_show_info(const struct nlmsghdr *nlh, struct inet_diag_msg *r,
 		} else
 			info = RTA_DATA(tb[INET_DIAG_INFO]);
 
-		if (show_options) {
-			s.has_ts_opt	   = TCPI_HAS_OPT(info, TCPI_OPT_TIMESTAMPS);
-			s.has_sack_opt	   = TCPI_HAS_OPT(info, TCPI_OPT_SACK);
-			s.has_ecn_opt	   = TCPI_HAS_OPT(info, TCPI_OPT_ECN);
-			s.has_ecnseen_opt  = TCPI_HAS_OPT(info, TCPI_OPT_ECN_SEEN);
-			s.has_fastopen_opt = TCPI_HAS_OPT(info, TCPI_OPT_SYN_DATA);
-		}
+    // show_options
+		s.has_ts_opt	   = TCPI_HAS_OPT(info, TCPI_OPT_TIMESTAMPS);
+		s.has_sack_opt	   = TCPI_HAS_OPT(info, TCPI_OPT_SACK);
+		s.has_ecn_opt	   = TCPI_HAS_OPT(info, TCPI_OPT_ECN);
+		s.has_ecnseen_opt  = TCPI_HAS_OPT(info, TCPI_OPT_ECN_SEEN);
+		s.has_fastopen_opt = TCPI_HAS_OPT(info, TCPI_OPT_SYN_DATA);
 
 		if (tb[INET_DIAG_CONG])
 			strncpy(s.cong_alg,
@@ -1008,7 +1004,7 @@ static void parse_diag_msg(struct nlmsghdr *nlh, struct sockstat *s)
 	else
 		s->local.bytelen = s->remote.bytelen = 16;
 
-        // XXX
+  // XXX
 	memcpy(s->local.data, r->id.idiag_src, s->local.bytelen);
 	memcpy(s->remote.data, r->id.idiag_dst, s->local.bytelen);
 }
@@ -1028,7 +1024,7 @@ static int inet_show_sock(struct nlmsghdr *nlh,
               sizeof(struct nlmsghdr) + sizeof(struct sockstat) + sizeof(int) + nlh->nlmsg_len);
     return 0;
   }
-        // GFR
+  // GFR
 	struct rtattr *tb[INET_DIAG_MAX+1];
 	struct inet_diag_msg *r = NLMSG_DATA(nlh);
 
@@ -1040,35 +1036,30 @@ static int inet_show_sock(struct nlmsghdr *nlh,
 
 	inet_stats_print(s, protocol);  // OUTPUT
 
-	if (show_options) {
-		struct tcpstat t = {};
+  // show_options
+	struct tcpstat t = {};
 
-		t.timer = r->idiag_timer;
-		t.timeout = r->idiag_expires;
-		t.retrans = r->idiag_retrans;
-		tcp_timer_print(&t);
+	t.timer = r->idiag_timer;
+	t.timeout = r->idiag_expires;
+	t.retrans = r->idiag_retrans;
+	tcp_timer_print(&t);
+
+	sock_details_print(s);
+	if (s->local.family == AF_INET6 && tb[INET_DIAG_SKV6ONLY]) {
+		unsigned char v6only;
+
+		v6only = *(__u8 *)RTA_DATA(tb[INET_DIAG_SKV6ONLY]);
+		printf(" v6only:%u", v6only);
+	}
+	if (tb[INET_DIAG_SHUTDOWN]) {
+		unsigned char mask;
+
+		mask = *(__u8 *)RTA_DATA(tb[INET_DIAG_SHUTDOWN]);
+		printf(" %c-%c", mask & 1 ? '-' : '<', mask & 2 ? '-' : '>');
 	}
 
-	if (show_details) {
-		sock_details_print(s);
-		if (s->local.family == AF_INET6 && tb[INET_DIAG_SKV6ONLY]) {
-			unsigned char v6only;
-
-			v6only = *(__u8 *)RTA_DATA(tb[INET_DIAG_SKV6ONLY]);
-			printf(" v6only:%u", v6only);
-		}
-		if (tb[INET_DIAG_SHUTDOWN]) {
-			unsigned char mask;
-
-			mask = *(__u8 *)RTA_DATA(tb[INET_DIAG_SHUTDOWN]);
-			printf(" %c-%c", mask & 1 ? '-' : '<', mask & 2 ? '-' : '>');
-		}
-	}
-
-	if (show_mem || show_tcpinfo) {
-		printf("\n\t");  // OUTPUT
-		tcp_show_info(nlh, r, tb);
-	}
+	printf("\n\t");  // OUTPUT
+	tcp_show_info(nlh, r, tb);
 
 	printf("\n");  // OUTPUT
 	return 0;
@@ -1101,16 +1092,14 @@ static int tcpdiag_send(int fd, int protocol, struct filter *f)
 		req.nlh.nlmsg_type = TCPDIAG_GETSOCK;
 	else
 		req.nlh.nlmsg_type = DCCPDIAG_GETSOCK;
-	if (show_mem) {
-		req.r.idiag_ext |= (1<<(INET_DIAG_MEMINFO-1));
-		req.r.idiag_ext |= (1<<(INET_DIAG_SKMEMINFO-1));
-	}
+  // show_mem
+	req.r.idiag_ext |= (1<<(INET_DIAG_MEMINFO-1));
+	req.r.idiag_ext |= (1<<(INET_DIAG_SKMEMINFO-1));
 
-	if (show_tcpinfo) {
-		req.r.idiag_ext |= (1<<(INET_DIAG_INFO-1));
-		req.r.idiag_ext |= (1<<(INET_DIAG_VEGASINFO-1));
-		req.r.idiag_ext |= (1<<(INET_DIAG_CONG-1));
-	}
+  // show_tcpinfo
+	req.r.idiag_ext |= (1<<(INET_DIAG_INFO-1));
+	req.r.idiag_ext |= (1<<(INET_DIAG_VEGASINFO-1));
+	req.r.idiag_ext |= (1<<(INET_DIAG_CONG-1));
 
 	iov[0] = (struct iovec){
 		.iov_base = &req,
@@ -1161,16 +1150,14 @@ static int sockdiag_send(int family, int fd, int protocol, struct filter *f)
 	req.r.sdiag_family = family;
 	req.r.sdiag_protocol = protocol;
 	req.r.idiag_states = f->states;
-	if (show_mem) {
-		req.r.idiag_ext |= (1<<(INET_DIAG_MEMINFO-1));
-		req.r.idiag_ext |= (1<<(INET_DIAG_SKMEMINFO-1));
-	}
+  // show_mem
+	req.r.idiag_ext |= (1<<(INET_DIAG_MEMINFO-1));
+	req.r.idiag_ext |= (1<<(INET_DIAG_SKMEMINFO-1));
 
-	if (show_tcpinfo) {
-		req.r.idiag_ext |= (1<<(INET_DIAG_INFO-1));
-		req.r.idiag_ext |= (1<<(INET_DIAG_VEGASINFO-1));
-		req.r.idiag_ext |= (1<<(INET_DIAG_CONG-1));
-	}
+  // show_tcpinfo
+	req.r.idiag_ext |= (1<<(INET_DIAG_INFO-1));
+	req.r.idiag_ext |= (1<<(INET_DIAG_VEGASINFO-1));
+	req.r.idiag_ext |= (1<<(INET_DIAG_CONG-1));
 
 	iov[0] = (struct iovec){
 		.iov_base = &req,
@@ -1227,6 +1214,19 @@ static int kill_inet_sock(struct nlmsghdr *h, void *arg)
 	return rtnl_talk(rth, &req.nlh, NULL, 0);
 }
 
+// Instead of show_one_inet_sock (or ...) stash the data.
+static int stash_indirect(const struct sockaddr_nl *addr,
+		struct nlmsghdr *nlh, void *arg) {
+    static int count = 0;
+    count++;
+    if (count % 100 == 0)
+    fprintf(stderr, "stash_indirect unimplemented\n");
+  // Need to compute the key, and stash the appropriate amount of data.
+  // TODO XXX
+  stash_data("foo", "bar", "data", 0);
+  return 0;
+}
+
 // INTERCEPT
 // stash the data instead of printing.
 // NOTE: addr not used, but it is part of interface!
@@ -1238,15 +1238,18 @@ static int show_one_inet_sock(const struct sockaddr_nl *addr,
 	struct inet_diag_msg *r = NLMSG_DATA(h);
 	struct sockstat s = {};
 
-	if (!(diag_arg->f->families & (1 << r->idiag_family)))
+	if (!(diag_arg->f->families & (1 << r->idiag_family))) {
+    fprintf(stderr, "%4d Filtered.\n", __LINE__);
 		return 0;
+  }
 
 	parse_diag_msg(h, &s);
 
-        // Deleted f->f related code.
+  // Deleted f->f related code.
 
-        // This does some data collection (in kill_inet_sock)!
+  // This does some data collection (in kill_inet_sock)!
 	if (diag_arg->f->kill && kill_inet_sock(h, arg) != 0) {
+   fprintf(stderr, "%4d Filtered.\n", __LINE__);
 		if (errno == EOPNOTSUPP || errno == ENOENT) {
 			/* Socket can't be closed, or is already closed. */
 			return 0;
@@ -1283,6 +1286,7 @@ static int inet_show_netlink(struct filter *f, FILE *dump_fp, int protocol)
 		return -1;
 
 	if (f->kill) {
+    fprintf(stderr, "%4d Filtered.\n", __LINE__);
 		if (rtnl_open_byproto(&rth2, 0, NETLINK_SOCK_DIAG)) {
 			rtnl_close(&rth);
 			return -1;
@@ -1299,8 +1303,8 @@ again:
 	if ((err = sockdiag_send(family, rth.fd, protocol, f)))
 		goto Exit;
 
-        //GFR this is where show_one_inet_sock is passed...
-	if ((err = rtnl_dump_filter(&rth, show_one_inet_sock, &arg))) {
+  //GFR this is where show_one_inet_sock is passed...
+	if ((err = rtnl_dump_filter(&rth, stash_indirect /*show_one_inet_sock*/, &arg))) {
 		if (family != PF_UNSPEC) {
 			family = PF_UNSPEC;
 			goto again;
@@ -1322,18 +1326,18 @@ Exit:
 static int tcp_show(struct filter *f, int socktype)
 {
 	if (!filter_af_get(f, AF_INET) && !filter_af_get(f, AF_INET6)) {
-                printf("AF_INET path:\n");
+    fprintf(stderr, "%4d Filtered.\n", __LINE__);
 		return 0;
-        }
+  }
 
 	dg_proto = TCP_PROTO;
 
 	if (inet_show_netlink(f, NULL, socktype) == 0) {
 		return 0;
-        }
+  }
 
-        fprintf(stderr, "%4d Turns out we need this backup code after all!\n", __LINE__);
-        exit(1);
+  fprintf(stderr, "%4d Turns out we need this backup code after all!\n", __LINE__);
+  exit(1);
 }
 
 static int udp_show(struct filter *f)
@@ -1345,16 +1349,19 @@ static int udp_show(struct filter *f)
     fprintf(stderr, "udp_show\n");
   }
 
-	if (!filter_af_get(f, AF_INET) && !filter_af_get(f, AF_INET6))
+	if (!filter_af_get(f, AF_INET) && !filter_af_get(f, AF_INET6)) {
+    fprintf(stderr, "%4d Filtered.\n", __LINE__);
 		return 0;
+  }
 
 	dg_proto = UDP_PROTO;
 
-	if (inet_show_netlink(f, NULL, IPPROTO_UDP) == 0)
+	if (inet_show_netlink(f, NULL, IPPROTO_UDP) == 0) {
 		return 0;
+  }
 
-        fprintf(stderr, "%4d Turns out we need this backup code after all!\n", __LINE__);
-        exit(1);
+  fprintf(stderr, "%4d Turns out we need this backup code after all!\n", __LINE__);
+  exit(1);
 }
 
 int unix_state_map[] = { SS_CLOSE, SS_SYN_SENT,
@@ -1403,10 +1410,14 @@ static void unix_stats_print(struct sockstat *list, struct filter *f)
 	char port_name[30] = {};
 
 	for (s = list; s; s = s->next) {
-		if (!(f->states & (1 << s->state)))
+		if (!(f->states & (1 << s->state))) {
+      fprintf(stderr, "%4d Skipped.\n", __LINE__);
 			continue;
-		if (unix_type_skip(s, f))
+    }
+		if (unix_type_skip(s, f)) {
+      fprintf(stderr, "%4d Skipped.\n", __LINE__);
 			continue;
+    }
 
 		peer = "*";
 		if (s->peer_name)
@@ -1427,7 +1438,7 @@ static void unix_stats_print(struct sockstat *list, struct filter *f)
 			}
 		}
 
-                // Deleted f->f related code.
+    // Deleted f->f related code.
 
 		sock_state_print(s, unix_netid_name(s->type));
 
@@ -1468,8 +1479,10 @@ static int unix_show_sock(const struct sockaddr_nl *addr, struct nlmsghdr *nlh,
 	stat.ino   = stat.lport = r->udiag_ino;
 	stat.local.family = stat.remote.family = AF_UNIX;
 
-	if (unix_type_skip(&stat, f))
+	if (unix_type_skip(&stat, f)) {
+    fprintf(stderr, "%4d Skipped.\n", __LINE__);
 		return 0;
+  }
 
 	if (tb[UNIX_DIAG_RQLEN]) {
 		struct unix_diag_rqlen *rql = RTA_DATA(tb[UNIX_DIAG_RQLEN]);
@@ -1490,25 +1503,22 @@ static int unix_show_sock(const struct sockaddr_nl *addr, struct nlmsghdr *nlh,
 	if (tb[UNIX_DIAG_PEER])
 		stat.rport = rta_getattr_u32(tb[UNIX_DIAG_PEER]);
 
-        // Deleted f->f related code.
+  // Deleted f->f related code.
 
-        // STASH DATA HERE.  (200 bytes)
+  // STASH DATA HERE.  (200 bytes)
 	unix_stats_print(&stat, f);
 
-	if (show_mem) {
-		printf("\t");
-		print_skmeminfo(tb, UNIX_DIAG_MEMINFO);
-	}
-	if (show_details) {
-		if (tb[UNIX_DIAG_SHUTDOWN]) {
-			unsigned char mask;
+  // show_mem
+	printf("\t");
+	print_skmeminfo(tb, UNIX_DIAG_MEMINFO);
+  // show_details
+	if (tb[UNIX_DIAG_SHUTDOWN]) {
+		unsigned char mask;
 
-			mask = *(__u8 *)RTA_DATA(tb[UNIX_DIAG_SHUTDOWN]);
-			printf(" %c-%c", mask & 1 ? '-' : '<', mask & 2 ? '-' : '>');
-		}
+		mask = *(__u8 *)RTA_DATA(tb[UNIX_DIAG_SHUTDOWN]);
+		printf(" %c-%c", mask & 1 ? '-' : '<', mask & 2 ? '-' : '>');
 	}
-	if (show_mem || show_details)
-		printf("\n");
+	printf("\n");
 
 	return 0;
 }
@@ -1534,7 +1544,7 @@ static int handle_netlink_request(struct filter *f, struct nlmsghdr *req,
 	ret = 0;
 Exit:
 	rtnl_close(&rth);
-        fprintf(stderr, "handle_netlink_request complete.\n");
+  fprintf(stderr, "handle_netlink_request complete.\n");
 	return ret;
 }
 
@@ -1545,12 +1555,12 @@ static int unix_show_netlink(struct filter *f)
 	req.r.sdiag_family = AF_UNIX;
 	req.r.udiag_states = f->states;
 	req.r.udiag_show = UDIAG_SHOW_NAME | UDIAG_SHOW_PEER | UDIAG_SHOW_RQLEN;
-	if (show_mem)
-		req.r.udiag_show |= UDIAG_SHOW_MEMINFO;
+  // show_mem
+	req.r.udiag_show |= UDIAG_SHOW_MEMINFO;
 
-        // INTERCEPT ALL OF THE line printers.
-        fprintf(stderr, "Calling handle_netlink_request. %d\n", __LINE__);
-	return handle_netlink_request(f, &req.nlh, sizeof(req), unix_show_sock);
+  // INTERCEPT ALL OF THE line printers.
+  fprintf(stderr, "Calling handle_netlink_request. %d\n", __LINE__);
+	return handle_netlink_request(f, &req.nlh, sizeof(req), stash_indirect /*unix_show_sock*/);
 }
 
 // With environment variables set, all the output comes from here.
@@ -1570,145 +1580,8 @@ static int unix_show(struct filter *f)
 
 	if (unix_show_netlink(f) == 0)
 		return 0;
-        fprintf(stderr, "%4d Turns out we need this backup code after all!\n", __LINE__);
-        exit(1);
-}
-
-static int netlink_show_one(struct filter *f,
-				int prot, int pid, unsigned int groups,
-				int state, int dst_pid, unsigned int dst_group,
-				int rq, int wq,
-				unsigned long long sk, unsigned long long cb)
-{
-	struct sockstat st;
-
-	SPRINT_BUF(prot_buf) = {};
-	const char *prot_name;
-	char procname[64] = {};
-
-	st.state = SS_CLOSE;
-	st.rq	 = rq;
-	st.wq	 = wq;
-
-        // Deleted f->f related code.
-
-	sock_state_print(&st, "nl");
-
-	if (resolve_services)
-		prot_name = nl_proto_n2a(prot, prot_buf, sizeof(prot_buf));
-	else
-		prot_name = int_to_str(prot, prot_buf);
-
-	if (pid == -1) {
-		procname[0] = '*';
-	} else if (resolve_services) {
-		int done = 0;
-
-		if (!pid) {
-			done = 1;
-			strncpy(procname, "kernel", 6);
-		} else if (pid > 0) {
-			FILE *fp;
-
-			snprintf(procname, sizeof(procname), "%s/%d/stat",
-				getenv("PROC_ROOT") ? : "/proc", pid);
-			if ((fp = fopen(procname, "r")) != NULL) {
-				if (fscanf(fp, "%*d (%[^)])", procname) == 1) {
-					snprintf(procname+strlen(procname),
-						sizeof(procname)-strlen(procname),
-						"/%d", pid);
-					done = 1;
-				}
-				fclose(fp);
-			}
-		}
-		if (!done)
-			int_to_str(pid, procname);
-	} else {
-		int_to_str(pid, procname);
-	}
-
-	sock_addr_print(prot_name, ":", procname, NULL);
-
-	if (state == NETLINK_CONNECTED) {
-		char dst_group_buf[30];
-		char dst_pid_buf[30];
-
-		sock_addr_print(int_to_str(dst_group, dst_group_buf), ":",
-				int_to_str(dst_pid, dst_pid_buf), NULL);
-	} else {
-		sock_addr_print("", "*", "", NULL);
-	}
-
-	if (show_details) {
-		printf(" sk=%llx cb=%llx groups=0x%08x", sk, cb, groups);
-	}
-	printf("\n");
-
-	return 0;
-}
-
-static int netlink_show_sock(const struct sockaddr_nl *addr,
-		struct nlmsghdr *nlh, void *arg)
-{
-	struct filter *f = (struct filter *)arg;
-	struct netlink_diag_msg *r = NLMSG_DATA(nlh);
-	struct rtattr *tb[NETLINK_DIAG_MAX+1];
-	int rq = 0, wq = 0;
-	unsigned long groups = 0;
-
-	parse_rtattr(tb, NETLINK_DIAG_MAX, (struct rtattr *)(r+1),
-		     nlh->nlmsg_len - NLMSG_LENGTH(sizeof(*r)));
-
-	if (tb[NETLINK_DIAG_GROUPS] && RTA_PAYLOAD(tb[NETLINK_DIAG_GROUPS]))
-		groups = *(unsigned long *) RTA_DATA(tb[NETLINK_DIAG_GROUPS]);
-
-	if (tb[NETLINK_DIAG_MEMINFO]) {
-		const __u32 *skmeminfo;
-
-		skmeminfo = RTA_DATA(tb[NETLINK_DIAG_MEMINFO]);
-
-		rq = skmeminfo[SK_MEMINFO_RMEM_ALLOC];
-		wq = skmeminfo[SK_MEMINFO_WMEM_ALLOC];
-	}
-
-	if (netlink_show_one(f, r->ndiag_protocol, r->ndiag_portid, groups,
-			 r->ndiag_state, r->ndiag_dst_portid, r->ndiag_dst_group,
-			 rq, wq, 0, 0)) {
-		return 0;
-	}
-
-	if (show_mem) {
-		printf("\t");
-		print_skmeminfo(tb, NETLINK_DIAG_MEMINFO);
-		printf("\n");
-	}
-
-	return 0;
-}
-
-static int netlink_show_netlink(struct filter *f)
-{
-	DIAG_REQUEST(req, struct netlink_diag_req r);
-
-	req.r.sdiag_family = AF_NETLINK;
-	req.r.sdiag_protocol = NDIAG_PROTO_ALL;
-	req.r.ndiag_show = NDIAG_SHOW_GROUPS | NDIAG_SHOW_MEMINFO;
-
-        // INTERCEPT
-        fprintf(stderr, "Calling handle_netlink_request. %d\n", __LINE__);
-	return handle_netlink_request(f, &req.nlh, sizeof(req), netlink_show_sock);
-}
-
-static int netlink_show(struct filter *f)
-{
-	if (!filter_af_get(f, AF_NETLINK) || !(f->states & (1 << SS_CLOSE)))
-		return 0;
-
-	if (netlink_show_netlink(f) == 0)
-		return 0;
-        fprintf(stderr, "%4d Turns out we need this backup code after all!\n", __LINE__);
-        exit(1);
+  fprintf(stderr, "%4d Turns out we need this backup code after all!\n", __LINE__);
+  exit(1);
 }
 
 struct sock_diag_msg {
@@ -1722,9 +1595,6 @@ int c_main(int argc, char *argv[])
 
 //      -adtuwxiem
 	show_options = 1;
-	show_details++;
-	show_mem = 1;
-	show_tcpinfo = 1;
 	filter_db_set(&current_filter, DCCP_DB);
 	filter_db_set(&current_filter, TCP_DB);
 	filter_db_set(&current_filter, UDP_DB);
@@ -1752,9 +1622,9 @@ int c_main(int argc, char *argv[])
 	}
 
 	if (ssfilter_parse(&current_filter.f, argc, argv, filter_fp)) {
-          fprintf(stderr, "No options!\n");
-          exit(1);
-        }
+    fprintf(stderr, "No options!\n");
+    exit(1);
+  }
 
 	netid_width = 0;
 	if (current_filter.dbs&(current_filter.dbs-1))
@@ -1816,8 +1686,10 @@ int c_main(int argc, char *argv[])
 
 	fflush(stdout);
 
-	if (current_filter.dbs & (1<<NETLINK_DB))
-		netlink_show(&current_filter);
+	if (current_filter.dbs & (1<<NETLINK_DB)) {
+    fprintf(stderr, "Unimplemented NETLINK_DB code.\n");
+    exit(1);
+  }
 	if (current_filter.dbs & UNIX_DBM)
 		unix_show(&current_filter);
 	if (current_filter.dbs & (1<<UDP_DB))
