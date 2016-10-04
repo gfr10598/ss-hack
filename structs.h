@@ -46,14 +46,14 @@ enum {
 	SS_UNKNOWN,
 	SS_ESTABLISHED,
 	SS_SYN_SENT,
-	SS_SYN_RECV,
+	SS_SYN_RECV,   // Excluded from SS_CONN
 	SS_FIN_WAIT1,
 	SS_FIN_WAIT2,
-	SS_TIME_WAIT,
-	SS_CLOSE,
+	SS_TIME_WAIT,  // Excluded from SS_CONN
+	SS_CLOSE,      // Excluded from SS_CONN
 	SS_CLOSE_WAIT,
 	SS_LAST_ACK,
-	SS_LISTEN,
+	SS_LISTEN,     // Excluded from SS_CONN
 	SS_CLOSING,
 	SS_MAX
 };

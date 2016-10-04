@@ -1,4 +1,4 @@
-CXXFLAGS= $(WXXFLAGS) -std=c++11 -pthread
+CXXFLAGS= $(WXXFLAGS) -std=c++11 -pthread -O2
 
 SSOBJ=ss.o ssfilter.o
 GFROBJ=gfr.o ssfilter.o gfr2.o

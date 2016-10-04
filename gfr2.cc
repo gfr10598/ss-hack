@@ -48,9 +48,16 @@ class ConnectionTracker {
   // Locate appropriate connection entry, swap its data, and update
   // its round.
   void StashData(size_t key, std::string data) {
+    const auto& it = connections_.find(key);
+    if (it == connections_.end()) {
+      new_items_++;
+    } else {
+      updates_++;
+    }
+    // TODO - optimize this.
     auto& entry = connections_[key];
     entry.first = round_;
-    entry.second.swap(data);
+    entry.second.swap(data);  // Possibly related to bug?
   }
 
   void OutputItem(const ConnectionMap::value_type& value) {
@@ -60,21 +67,37 @@ class ConnectionTracker {
   // Iterate through the map, find any items that are from previous
   // round, and take action on them.
   void FinishRound() {
+    // BUG - there is an access after free bug on a string somewhere!!
+    //
+    fprintf(stderr, "Added: %4d, Updated: %4d, Removing %4d\n",
+            new_items_, updates_, size_after_last_round_ - updates_);
+    if (size_after_last_round_ == updates_) {
+      size_after_last_round_ = size();
+      updates_ = 0;
+      new_items_ = 0;
+      return;
+    }
     long ignored = 0;
     long erased = 0;
-    for (auto it = connections_.begin(); it != connections_.end(); ++it) {
+    for (auto it = connections_.begin(); it != connections_.end();) {
       if (it->second.first != round_) {
         OutputItem(*it);
         erased += it->second.second.size();
-        connections_.erase(it);
+        it = connections_.erase(it);
       } else {
         ignored += it->second.second.size();
+        ++it;
       }
     }
     ++round_;  // Don't care about wrapping.
     fprintf(stderr, "map has %lu entries.\n", size());
-    fprintf(stderr, "Total kept: %ld\n", ignored);
-    fprintf(stderr, "Total erased: %ld\n", erased);
+    fprintf(stderr, "Total bytes retained: %ld\n", ignored);
+    fprintf(stderr, "Total bytes reported: %ld\n", erased);
+
+    // TODO Expect that size() = new_items_ + updates_.
+    size_after_last_round_ = size();
+    updates_ = 0;
+    new_items_ = 0;
   }
 
   size_t size() const {
@@ -85,6 +108,9 @@ class ConnectionTracker {
   // TODO(gfr) Consider having separate map for each family.
   ConnectionMap connections_;
   int round_ = 0;
+  int size_after_last_round_ = 0; // Items count after last FinishRound.
+  int updates_ = 0;  // Items updated since last FinishRound.
+  int new_items_ = 0;  // New items added since last FinishRound.
 };
 
 static ConnectionTracker g_tracker;
@@ -95,7 +121,7 @@ static ConnectionTracker g_tracker;
 extern "C"
 void finish_round() {
   g_tracker.FinishRound();
-  sleep(2);
+  sleep(1);
 }
 
 extern "C"
@@ -115,8 +141,5 @@ void stash_data_internal(int family,
 
 int main(int argc, char* argv[]) {
   int r = c_main(argc, argv);
-  g_tracker.FinishRound();
-  // r = c_main(argc, argv);
-  //g_tracker.FinishRound();
   return r;
 }

@@ -11,7 +11,6 @@
  * Authors:	Alexey Kuznetsov, <kuznet@ms2.inr.ac.ru>
  */
 
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -26,13 +25,6 @@
 #include "utils.h"
 #include "rt_names.h"
 #include "libnetlink.h"
-
-//#include <linux/tcp.h>
-//#include <linux/sock_diag.h>
-//#include <linux/inet_diag.h>
-//#include <linux/unix_diag.h>
-//#include <linux/filter.h>
-//#include <linux/netlink_diag.h>
 
 #include "structs.h"
 
@@ -131,14 +123,6 @@ static void filter_db_set(struct filter *f, int db)
 	f->states   |= default_dbs[db].states;
 	f->dbs	    |= 1 << db;
 	do_default   = 0;
-}
-
-static void filter_af_set(struct filter *f, int af)
-{
-	f->states	   |= default_afs[af].states;
-	f->families	   |= 1 << af;
-	do_default	    = 0;
-	preferred_family    = af;
 }
 
 static int filter_af_get(struct filter *f, int af)
@@ -375,14 +359,18 @@ void stash_data_internal(int family,
                          const struct inet_diag_sockid id,
                          const struct nlmsghdr *nlh);
 
-// Instead of show_one_inet_sock (or ...) stash the data.
-// Don't use arg???
-static int stash_indirect(const struct sockaddr_nl *addr,
+static int stash_inet(const struct sockaddr_nl *addr,
 		struct nlmsghdr *nlh, void *arg) {
   // Need to compute the key, and stash the appropriate amount of data.
   // We will need the inet_diag_sockid, and maybe the family and state?
   struct inet_diag_msg *r = NLMSG_DATA(nlh);
-  stash_data_internal(r->idiag_family, r->id, nlh);
+  // I've set up the state filter to only request SS_ESTABLISHED, so
+  // this may be redundant.
+  if (r->idiag_state == SS_ESTABLISHED) {
+    stash_data_internal(r->idiag_family, r->id, nlh);
+  } else {
+    fprintf(stderr, "Saw a non established!\n");
+  }
   return 0;
 }
 
@@ -541,7 +529,7 @@ static int kill_inet_sock(struct nlmsghdr *h, void *arg)
 // misc/gfr -t -i -H -e -u -x -a -m
 static int inet_show_netlink(struct filter *f, FILE *dump_fp, int protocol)
 {
-  fprintf(stderr, "protocol = %d\n", protocol);  // TCP is 6
+//  fprintf(stderr, "protocol = %d\n", protocol);  // TCP is 6
 	int err = 0;
 	struct rtnl_handle rth, rth2;
 	int family = PF_INET;
@@ -571,7 +559,7 @@ again:
   //GFR this is where show_one_inet_sock is passed...
   // TODO - how do we figure out how to interpret this later, without the
   // implicit info in the call to show_one_inet_sock?
-	if ((err = rtnl_dump_filter(&rth, stash_indirect /*show_one_inet_sock*/, &arg))) {
+	if ((err = rtnl_dump_filter(&rth, stash_inet /*show_one_inet_sock*/, &arg))) {
 		if (family != PF_UNSPEC) {
 			family = PF_UNSPEC;
 			goto again;
@@ -627,58 +615,6 @@ static int udp_show(struct filter *f)
 int unix_state_map[] = { SS_CLOSE, SS_SYN_SENT,
 			 SS_ESTABLISHED, SS_CLOSING };
 
-
-static int handle_netlink_request(struct filter *f, struct nlmsghdr *req,
-		size_t size, rtnl_filter_t show_one_sock)
-{
-	int ret = -1;
-	struct rtnl_handle rth;
-
-	if (rtnl_open_byproto(&rth, 0, NETLINK_SOCK_DIAG))
-		return -1;
-
-	rth.dump = MAGIC_SEQ;
-
-	if (rtnl_send(&rth, req, size) < 0)
-		goto Exit;
-
-	if (rtnl_dump_filter(&rth, show_one_sock, f))
-		goto Exit;
-
-	ret = 0;
-Exit:
-	rtnl_close(&rth);
-	return ret;
-}
-
-static int unix_show_netlink(struct filter *f)
-{
-	DIAG_REQUEST(req, struct unix_diag_req r);
-
-	req.r.sdiag_family = AF_UNIX;
-	req.r.udiag_states = f->states;
-	req.r.udiag_show = UDIAG_SHOW_NAME | UDIAG_SHOW_PEER | UDIAG_SHOW_RQLEN;
-  // show_mem
-	req.r.udiag_show |= UDIAG_SHOW_MEMINFO;
-
-  // INTERCEPT ALL OF THE line printers.
-  // TODO - how do we figure out how to interpret this later, without the
-  // implicit info in the call to unix_show_sock?
-	return handle_netlink_request(f, &req.nlh, sizeof(req), stash_indirect /*unix_show_sock*/);
-}
-
-// With environment variables set, all the output comes from here.
-static int unix_show(struct filter *f)
-{
-	if (!filter_af_get(f, AF_UNIX))
-		return 0;
-
-	if (unix_show_netlink(f) == 0)
-		return 0;
-  fprintf(stderr, "%4d Turns out we need this backup code after all!\n", __LINE__);
-  exit(1);
-}
-
 struct sock_diag_msg {
 	__u8 sdiag_family;
 };
@@ -688,13 +624,12 @@ int c_main(int argc, char *argv[])
 	FILE *filter_fp = NULL;
 	int state_filter = 0;
 
-//      -adtuwxiem
+//      -adtuwiem   Leaving out -x (unix) for now.
 	filter_db_set(&current_filter, DCCP_DB);
 	filter_db_set(&current_filter, TCP_DB);
 	filter_db_set(&current_filter, UDP_DB);
 	filter_db_set(&current_filter, RAW_DB);
-	filter_af_set(&current_filter, AF_UNIX);
-	state_filter = SS_ALL;
+	state_filter = 1 << SS_ESTABLISHED;
 
 	argc -= optind;
 	argv += optind;
@@ -759,19 +694,15 @@ int c_main(int argc, char *argv[])
     fprintf(stderr, "Unimplemented NETLINK_DB code.\n");
     exit(1);
   }
-	if (current_filter.dbs & UNIX_DBM) unix_show(&current_filter);
+  int i;
+  for (i = 0; i < 60; i++) {
+//	if (current_filter.dbs & UNIX_DBM) unix_show(&current_filter);
 	if (current_filter.dbs & (1<<UDP_DB)) udp_show(&current_filter);
 	if (current_filter.dbs & (1<<TCP_DB)) tcp_show(&current_filter, IPPROTO_TCP);
 	if (current_filter.dbs & (1<<DCCP_DB))
 		tcp_show(&current_filter, IPPROTO_DCCP);
 
-  finish_round();
-
-	if (current_filter.dbs & UNIX_DBM) unix_show(&current_filter);
-	if (current_filter.dbs & (1<<UDP_DB)) udp_show(&current_filter);
-	if (current_filter.dbs & (1<<TCP_DB)) tcp_show(&current_filter, IPPROTO_TCP);
-	if (current_filter.dbs & (1<<DCCP_DB))
-		tcp_show(&current_filter, IPPROTO_DCCP);
-
-	return 0;
+    finish_round();
+  }
+  return 0;
 }
