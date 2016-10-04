@@ -431,14 +431,9 @@ void stash_data_internal(int family,
 // Don't use arg???
 static int stash_indirect(const struct sockaddr_nl *addr,
 		struct nlmsghdr *nlh, void *arg) {
-    static int count = 0;
-    count++;
-    if (count % 100 == 0)
-    fprintf(stderr, "stash_indirect unimplemented\n");
   // Need to compute the key, and stash the appropriate amount of data.
   // We will need the inet_diag_sockid, and maybe the family and state?
-	struct inet_diag_msg *r = NLMSG_DATA(nlh);
-
+  struct inet_diag_msg *r = NLMSG_DATA(nlh);
   stash_data_internal(r->idiag_family, r->id, nlh);
   return 0;
 }
@@ -632,6 +627,8 @@ again:
 		goto Exit;
 
   //GFR this is where show_one_inet_sock is passed...
+  // TODO - how do we figure out how to interpret this later, without the
+  // implicit info in the call to show_one_inet_sock?
 	if ((err = rtnl_dump_filter(&rth, stash_indirect /*show_one_inet_sock*/, &arg))) {
 		if (family != PF_UNSPEC) {
 			family = PF_UNSPEC;
@@ -733,6 +730,8 @@ static int unix_show_netlink(struct filter *f)
 
   // INTERCEPT ALL OF THE line printers.
   fprintf(stderr, "Calling handle_netlink_request. %d\n", __LINE__);
+  // TODO - how do we figure out how to interpret this later, without the
+  // implicit info in the call to unix_show_sock?
 	return handle_netlink_request(f, &req.nlh, sizeof(req), stash_indirect /*unix_show_sock*/);
 }
 

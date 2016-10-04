@@ -1,3 +1,8 @@
+// Code extracted from net-next ss.c
+// This code will be used for two purposes:
+//  1. template for parsing tcp_info related data.
+//  2. verifying that the binary data stashed by sidestream matches
+//     the data saved by ss.c ???
 
 #include <netdb.h>  // setservent
 
@@ -652,6 +657,9 @@ static void tcp_show_info(const struct nlmsghdr *nlh, struct inet_diag_msg *r,
 	}
 }
 
+// Use this as template to extract the info we need from nlh, to stash
+// away for future printing.
+// TODO also look at netlink APIs for more information.
 static void parse_diag_msg(struct nlmsghdr *nlh, struct sockstat *s)
 {
 	struct rtattr *tb[INET_DIAG_MAX+1];
@@ -661,6 +669,7 @@ static void parse_diag_msg(struct nlmsghdr *nlh, struct sockstat *s)
 		     nlh->nlmsg_len - NLMSG_LENGTH(sizeof(*r)));
 
 	s->state	= r->idiag_state;
+  // We need this to determine the number of bytes in the addresses.
 	s->local.family	= s->remote.family = r->idiag_family;
 	s->lport	= ntohs(r->id.idiag_sport);
 	s->rport	= ntohs(r->id.idiag_dport);
@@ -671,6 +680,7 @@ static void parse_diag_msg(struct nlmsghdr *nlh, struct sockstat *s)
 	s->iface	= r->id.idiag_if;
 //	s->sk		= cookie_sk_get(&r->id.idiag_cookie[0]);
 
+  // Probably don't need this
 	s->mark = 0;
 	if (tb[INET_DIAG_MARK])
 		s->mark = *(__u32 *) RTA_DATA(tb[INET_DIAG_MARK]);
@@ -742,7 +752,7 @@ static int show_one_inet_sock(const struct sockaddr_nl *addr,
 		struct nlmsghdr *h, void *arg)
 {
 	int err;
-	struct inet_diag_arg *diag_arg = arg;
+	struct inet_diag_arg *diag_arg = arg;  // Used only to find protocol.
 //	struct inet_diag_msg *r = NLMSG_DATA(h);
 	struct sockstat s = {};
 
