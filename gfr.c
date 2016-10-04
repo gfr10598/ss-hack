@@ -598,402 +598,10 @@ struct aafilter {
 	struct aafilter *next;
 };
 
-static int inet2_addr_match(const inet_prefix *a, const inet_prefix *p,
-			    int plen)
-{
-	if (!inet_addr_match(a, p, plen))
-		return 0;
-
-	/* Cursed "v4 mapped" addresses: v4 mapped socket matches
-	 * pure IPv4 rule, but v4-mapped rule selects only v4-mapped
-	 * sockets. Fair? */
-	if (p->family == AF_INET && a->family == AF_INET6) {
-		if (a->data[0] == 0 && a->data[1] == 0 &&
-		    a->data[2] == htonl(0xffff)) {
-			inet_prefix tmp = *a;
-
-			tmp.data[0] = a->data[3];
-			return inet_addr_match(&tmp, p, plen);
-		}
-	}
-	return 1;
-}
-
-static int unix_match(const inet_prefix *a, const inet_prefix *p)
-{
-	char *addr, *pattern;
-
-	memcpy(&addr, a->data, sizeof(addr));
-	memcpy(&pattern, p->data, sizeof(pattern));
-	if (pattern == NULL)
-		return 1;
-	if (addr == NULL)
-		addr = "";
-	return !fnmatch(pattern, addr, 0);
-}
-
-#if 0
-static int run_ssfilter(struct ssfilter *f, struct sockstat *s)
-{
-  fprintf(stderr, "%4d run_ssfilter.\n",__LINE__);
-	switch (f->type) {
-		case SSF_S_AUTO:
-	{
-		if (s->local.family == AF_UNIX) {
-			char *p;
-
-			memcpy(&p, s->local.data, sizeof(p));
-			return p == NULL || (p[0] == '@' && strlen(p) == 6 &&
-					     strspn(p+1, "0123456789abcdef") == 5);
-		}
-		if (s->local.family == AF_PACKET)
-			return s->lport == 0 && s->local.data[0] == 0;
-		if (s->local.family == AF_NETLINK)
-			return s->lport < 0;
-
-		return is_ephemeral(s->lport);
-	}
-		case SSF_DCOND:
-	{
-		struct aafilter *a = (void *)f->pred;
-
-		if (a->addr.family == AF_UNIX)
-			return unix_match(&s->remote, &a->addr);
-		if (a->port != -1 && a->port != s->rport)
-			return 0;
-		if (a->addr.bitlen) {
-			do {
-				if (!inet2_addr_match(&s->remote, &a->addr, a->addr.bitlen))
-					return 1;
-			} while ((a = a->next) != NULL);
-			return 0;
-		}
-		return 1;
-	}
-		case SSF_SCOND:
-	{
-		struct aafilter *a = (void *)f->pred;
-
-		if (a->addr.family == AF_UNIX)
-			return unix_match(&s->local, &a->addr);
-		if (a->port != -1 && a->port != s->lport)
-			return 0;
-		if (a->addr.bitlen) {
-			do {
-				if (!inet2_addr_match(&s->local, &a->addr, a->addr.bitlen))
-					return 1;
-			} while ((a = a->next) != NULL);
-			return 0;
-		}
-		return 1;
-	}
-		case SSF_D_GE:
-	{
-		struct aafilter *a = (void *)f->pred;
-
-		return s->rport >= a->port;
-	}
-		case SSF_D_LE:
-	{
-		struct aafilter *a = (void *)f->pred;
-
-		return s->rport <= a->port;
-	}
-		case SSF_S_GE:
-	{
-		struct aafilter *a = (void *)f->pred;
-
-		return s->lport >= a->port;
-	}
-		case SSF_S_LE:
-	{
-		struct aafilter *a = (void *)f->pred;
-
-		return s->lport <= a->port;
-	}
-		case SSF_DEVCOND:
-	{
-		struct aafilter *a = (void *)f->pred;
-
-		return s->iface == a->iface;
-	}
-		case SSF_MARKMASK:
-	{
-		struct aafilter *a = (void *)f->pred;
-
-		return (s->mark & a->mask) == a->mark;
-	}
-		/* Yup. It is recursion. Sorry. */
-		case SSF_AND:
-		return run_ssfilter(f->pred, s) && run_ssfilter(f->post, s);
-		case SSF_OR:
-		return run_ssfilter(f->pred, s) || run_ssfilter(f->post, s);
-		case SSF_NOT:
-		return !run_ssfilter(f->pred, s);
-		default:
-		abort();
-	}
-}
-#endif
-/* Relocate external jumps by reloc. */
-static void ssfilter_patch(char *a, int len, int reloc)
-{
-	while (len > 0) {
-		struct inet_diag_bc_op *op = (struct inet_diag_bc_op *)a;
-
-		if (op->no == len+4)
-			op->no += reloc;
-		len -= op->yes;
-		a += op->yes;
-	}
-	if (len < 0)
-		abort();
-}
-
-static int ssfilter_bytecompile(struct ssfilter *f, char **bytecode)
-{
-	switch (f->type) {
-		case SSF_S_AUTO:
-	{
-		if (!(*bytecode = malloc(4))) abort();
-		((struct inet_diag_bc_op *)*bytecode)[0] = (struct inet_diag_bc_op){ INET_DIAG_BC_AUTO, 4, 8 };
-		return 4;
-	}
-		case SSF_DCOND:
-		case SSF_SCOND:
-	{
-		struct aafilter *a = (void *)f->pred;
-		struct aafilter *b;
-		char *ptr;
-		int  code = (f->type == SSF_DCOND ? INET_DIAG_BC_D_COND : INET_DIAG_BC_S_COND);
-		int len = 0;
-
-		for (b = a; b; b = b->next) {
-			len += 4 + sizeof(struct inet_diag_hostcond);
-			if (a->addr.family == AF_INET6)
-				len += 16;
-			else
-				len += 4;
-			if (b->next)
-				len += 4;
-		}
-		if (!(ptr = malloc(len))) abort();
-		*bytecode = ptr;
-		for (b = a; b; b = b->next) {
-			struct inet_diag_bc_op *op = (struct inet_diag_bc_op *)ptr;
-			int alen = (a->addr.family == AF_INET6 ? 16 : 4);
-			int oplen = alen + 4 + sizeof(struct inet_diag_hostcond);
-			struct inet_diag_hostcond *cond = (struct inet_diag_hostcond *)(ptr+4);
-
-			*op = (struct inet_diag_bc_op){ code, oplen, oplen+4 };
-			cond->family = a->addr.family;
-			cond->port = a->port;
-			cond->prefix_len = a->addr.bitlen;
-			memcpy(cond->addr, a->addr.data, alen);
-			ptr += oplen;
-			if (b->next) {
-				op = (struct inet_diag_bc_op *)ptr;
-				*op = (struct inet_diag_bc_op){ INET_DIAG_BC_JMP, 4, len - (ptr-*bytecode)};
-				ptr += 4;
-			}
-		}
-		return ptr - *bytecode;
-	}
-		case SSF_D_GE:
-	{
-		struct aafilter *x = (void *)f->pred;
-
-		if (!(*bytecode = malloc(8))) abort();
-		((struct inet_diag_bc_op *)*bytecode)[0] = (struct inet_diag_bc_op){ INET_DIAG_BC_D_GE, 8, 12 };
-		((struct inet_diag_bc_op *)*bytecode)[1] = (struct inet_diag_bc_op){ 0, 0, x->port };
-		return 8;
-	}
-		case SSF_D_LE:
-	{
-		struct aafilter *x = (void *)f->pred;
-
-		if (!(*bytecode = malloc(8))) abort();
-		((struct inet_diag_bc_op *)*bytecode)[0] = (struct inet_diag_bc_op){ INET_DIAG_BC_D_LE, 8, 12 };
-		((struct inet_diag_bc_op *)*bytecode)[1] = (struct inet_diag_bc_op){ 0, 0, x->port };
-		return 8;
-	}
-		case SSF_S_GE:
-	{
-		struct aafilter *x = (void *)f->pred;
-
-		if (!(*bytecode = malloc(8))) abort();
-		((struct inet_diag_bc_op *)*bytecode)[0] = (struct inet_diag_bc_op){ INET_DIAG_BC_S_GE, 8, 12 };
-		((struct inet_diag_bc_op *)*bytecode)[1] = (struct inet_diag_bc_op){ 0, 0, x->port };
-		return 8;
-	}
-		case SSF_S_LE:
-	{
-		struct aafilter *x = (void *)f->pred;
-
-		if (!(*bytecode = malloc(8))) abort();
-		((struct inet_diag_bc_op *)*bytecode)[0] = (struct inet_diag_bc_op){ INET_DIAG_BC_S_LE, 8, 12 };
-		((struct inet_diag_bc_op *)*bytecode)[1] = (struct inet_diag_bc_op){ 0, 0, x->port };
-		return 8;
-	}
-
-		case SSF_AND:
-	{
-		char *a1 = NULL, *a2 = NULL, *a;
-		int l1, l2;
-
-		l1 = ssfilter_bytecompile(f->pred, &a1);
-		l2 = ssfilter_bytecompile(f->post, &a2);
-		if (!l1 || !l2) {
-			free(a1);
-			free(a2);
-			return 0;
-		}
-		if (!(a = malloc(l1+l2))) abort();
-		memcpy(a, a1, l1);
-		memcpy(a+l1, a2, l2);
-		free(a1); free(a2);
-		ssfilter_patch(a, l1, l2);
-		*bytecode = a;
-		return l1+l2;
-	}
-		case SSF_OR:
-	{
-		char *a1 = NULL, *a2 = NULL, *a;
-		int l1, l2;
-
-		l1 = ssfilter_bytecompile(f->pred, &a1);
-		l2 = ssfilter_bytecompile(f->post, &a2);
-		if (!l1 || !l2) {
-			free(a1);
-			free(a2);
-			return 0;
-		}
-		if (!(a = malloc(l1+l2+4))) abort();
-		memcpy(a, a1, l1);
-		memcpy(a+l1+4, a2, l2);
-		free(a1); free(a2);
-		*(struct inet_diag_bc_op *)(a+l1) = (struct inet_diag_bc_op){ INET_DIAG_BC_JMP, 4, l2+4 };
-		*bytecode = a;
-		return l1+l2+4;
-	}
-		case SSF_NOT:
-	{
-		char *a1 = NULL, *a;
-		int l1;
-
-		l1 = ssfilter_bytecompile(f->pred, &a1);
-		if (!l1) {
-			free(a1);
-			return 0;
-		}
-		if (!(a = malloc(l1+4))) abort();
-		memcpy(a, a1, l1);
-		free(a1);
-		*(struct inet_diag_bc_op *)(a+l1) = (struct inet_diag_bc_op){ INET_DIAG_BC_JMP, 4, 8 };
-		*bytecode = a;
-		return l1+4;
-	}
-		case SSF_DEVCOND:
-	{
-		/* bytecompile for SSF_DEVCOND not supported yet */
-		return 0;
-	}
-		case SSF_MARKMASK:
-	{
-		struct aafilter *a = (void *)f->pred;
-		struct instr {
-			struct inet_diag_bc_op op;
-			struct inet_diag_markcond cond;
-		};
-		int inslen = sizeof(struct instr);
-
-		if (!(*bytecode = malloc(inslen))) abort();
-		((struct instr *)*bytecode)[0] = (struct instr) {
-			{ INET_DIAG_BC_MARK_COND, inslen, inslen + 4 },
-			{ a->mark, a->mask},
-		};
-
-		return inslen;
-	}
-		default:
-		abort();
-	}
-}
-
-static int remember_he(struct aafilter *a, struct hostent *he)
-{
-	char **ptr = he->h_addr_list;
-	int cnt = 0;
-	int len;
-
-	if (he->h_addrtype == AF_INET)
-		len = 4;
-	else if (he->h_addrtype == AF_INET6)
-		len = 16;
-	else
-		return 0;
-
-	while (*ptr) {
-		struct aafilter *b = a;
-
-		if (a->addr.bitlen) {
-			if ((b = malloc(sizeof(*b))) == NULL)
-				return cnt;
-			*b = *a;
-			b->next = a->next;
-			a->next = b;
-		}
-		memcpy(b->addr.data, *ptr, len);
-		b->addr.bytelen = len;
-		b->addr.bitlen = len*8;
-		b->addr.family = he->h_addrtype;
-		ptr++;
-		cnt++;
-	}
-	return cnt;
-}
-
-static int get_dns_host(struct aafilter *a, const char *addr, int fam)
-{
-	static int notfirst;
-	int cnt = 0;
-	struct hostent *he;
-
-	a->addr.bitlen = 0;
-	if (!notfirst) {
-		sethostent(1);
-		notfirst = 1;
-	}
-	he = gethostbyname2(addr, fam == AF_UNSPEC ? AF_INET : fam);
-	if (he)
-		cnt = remember_he(a, he);
-	if (fam == AF_UNSPEC) {
-		he = gethostbyname2(addr, AF_INET6);
-		if (he)
-			cnt += remember_he(a, he);
-	}
-	return !cnt;
-}
-
-static int xll_initted;
-
-static void xll_init(void)
-{
-	struct rtnl_handle rth;
-
-	if (rtnl_open(&rth, 0) < 0)
-		exit(1);
-
-	ll_init_map(&rth);
-	rtnl_close(&rth);
-	xll_initted = 1;
-}
-
-static int xll_name_to_index(const char *dev)
-{
-	if (!xll_initted)
-		xll_init();
-	return ll_name_to_index(dev);
+static int ssfilter_bytecompile(struct ssfilter *f, char **bytecode) {
+  fprintf(stderr, "Call to unimplemented ssfilter_bytecompile!\n");
+  exit(1);
+  return 0;
 }
 
 /*******************************************************************
@@ -1001,215 +609,22 @@ static int xll_name_to_index(const char *dev)
  ******************************************************************/
 void *parse_devcond(char *name)
 {
-        fprintf(stderr, "%4d Called!\n", __LINE__);
-	struct aafilter a = { .iface = 0 };
-	struct aafilter *res;
-
-	a.iface = xll_name_to_index(name);
-	if (a.iface == 0) {
-		char *end;
-		unsigned long n;
-
-		n = strtoul(name, &end, 0);
-		if (!end || end == name || *end || n > UINT_MAX)
-			return NULL;
-
-		a.iface = n;
-	}
-
-	res = malloc(sizeof(*res));
-	*res = a;
-
-	return res;
+  fprintf(stderr, "Call to unimplemented parse_devcond.\n");
+  exit(1);
+  return NULL;
 }
 
-void *parse_hostcond(char *addr, bool is_port)
-{
-        fprintf(stderr, "%4d Called!\n", __LINE__);
-	char *port = NULL;
-	struct aafilter a = { .port = -1 };
-	struct aafilter *res;
-	int fam = preferred_family;
-	struct filter *f = &current_filter;
-
-	if (fam == AF_UNIX || strncmp(addr, "unix:", 5) == 0) {
-		char *p;
-
-		a.addr.family = AF_UNIX;
-		if (strncmp(addr, "unix:", 5) == 0)
-			addr += 5;
-		p = strdup(addr);
-		a.addr.bitlen = 8*strlen(p);
-		memcpy(a.addr.data, &p, sizeof(p));
-		fam = AF_UNIX;
-		goto out;
-	}
-
-	if (fam == AF_PACKET || strncmp(addr, "link:", 5) == 0) {
-		a.addr.family = AF_PACKET;
-		a.addr.bitlen = 0;
-		if (strncmp(addr, "link:", 5) == 0)
-			addr += 5;
-		port = strchr(addr, ':');
-		if (port) {
-			*port = 0;
-			if (port[1] && strcmp(port+1, "*")) {
-				if (get_integer(&a.port, port+1, 0)) {
-					if ((a.port = xll_name_to_index(port+1)) <= 0)
-						return NULL;
-				}
-			}
-		}
-		if (addr[0] && strcmp(addr, "*")) {
-			unsigned short tmp;
-
-			a.addr.bitlen = 32;
-			if (ll_proto_a2n(&tmp, addr))
-				return NULL;
-			a.addr.data[0] = ntohs(tmp);
-		}
-		fam = AF_PACKET;
-		goto out;
-	}
-
-	if (fam == AF_NETLINK || strncmp(addr, "netlink:", 8) == 0) {
-		a.addr.family = AF_NETLINK;
-		a.addr.bitlen = 0;
-		if (strncmp(addr, "netlink:", 8) == 0)
-			addr += 8;
-		port = strchr(addr, ':');
-		if (port) {
-			*port = 0;
-			if (port[1] && strcmp(port+1, "*")) {
-				if (get_integer(&a.port, port+1, 0)) {
-					if (strcmp(port+1, "kernel") == 0)
-						a.port = 0;
-					else
-						return NULL;
-				}
-			}
-		}
-		if (addr[0] && strcmp(addr, "*")) {
-			a.addr.bitlen = 32;
-			if (nl_proto_a2n(&a.addr.data[0], addr) == -1)
-				return NULL;
-		}
-		fam = AF_NETLINK;
-		goto out;
-	}
-
-	if (fam == AF_INET || !strncmp(addr, "inet:", 5)) {
-		fam = AF_INET;
-		if (!strncmp(addr, "inet:", 5))
-			addr += 5;
-	} else if (fam == AF_INET6 || !strncmp(addr, "inet6:", 6)) {
-		fam = AF_INET6;
-		if (!strncmp(addr, "inet6:", 6))
-			addr += 6;
-	}
-
-	/* URL-like literal [] */
-	if (addr[0] == '[') {
-		addr++;
-		if ((port = strchr(addr, ']')) == NULL)
-			return NULL;
-		*port++ = 0;
-	} else if (addr[0] == '*') {
-		port = addr+1;
-	} else {
-		port = strrchr(strchr(addr, '/') ? : addr, ':');
-	}
-
-	if (is_port)
-		port = addr;
-
-	if (port && *port) {
-		if (*port == ':')
-			*port++ = 0;
-
-		if (*port && *port != '*') {
-			if (get_integer(&a.port, port, 0)) {
-				struct servent *se1 = NULL;
-				struct servent *se2 = NULL;
-
-				if (current_filter.dbs&(1<<UDP_DB))
-					se1 = getservbyname(port, UDP_PROTO);
-				if (current_filter.dbs&(1<<TCP_DB))
-					se2 = getservbyname(port, TCP_PROTO);
-				if (se1 && se2 && se1->s_port != se2->s_port) {
-					fprintf(stderr, "Error: ambiguous port \"%s\".\n", port);
-					return NULL;
-				}
-				if (!se1)
-					se1 = se2;
-				if (se1) {
-					a.port = ntohs(se1->s_port);
-				} else {
-					struct scache *s;
-
-					for (s = rlist; s; s = s->next) {
-						if ((s->proto == UDP_PROTO &&
-						     (current_filter.dbs&(1<<UDP_DB))) ||
-						    (s->proto == TCP_PROTO &&
-						     (current_filter.dbs&(1<<TCP_DB)))) {
-							if (s->name && strcmp(s->name, port) == 0) {
-								if (a.port > 0 && a.port != s->port) {
-									fprintf(stderr, "Error: ambiguous port \"%s\".\n", port);
-									return NULL;
-								}
-								a.port = s->port;
-							}
-						}
-					}
-					if (a.port <= 0) {
-						fprintf(stderr, "Error: \"%s\" does not look like a port.\n", port);
-						return NULL;
-					}
-				}
-			}
-		}
-	}
-	if (!is_port && addr && *addr && *addr != '*') {
-		if (get_prefix_1(&a.addr, addr, fam)) {
-			if (get_dns_host(&a, addr, fam)) {
-				fprintf(stderr, "Error: an inet prefix is expected rather than \"%s\".\n", addr);
-				return NULL;
-			}
-		}
-	}
-
-out:
-	if (fam != AF_UNSPEC) {
-		int states = f->states;
-		f->families = 0;
-		filter_af_set(f, fam);
-		filter_states_set(f, states);
-	}
-
-	res = malloc(sizeof(*res));
-	if (res)
-		memcpy(res, &a, sizeof(a));
-	return res;
+void *parse_hostcond(char *addr, bool is_port) {
+  fprintf(stderr, "Call to unimplemented parse_hostcond.\n");
+  exit(1);
+  return NULL;
 }
 
 void *parse_markmask(const char *markmask)
 {
-        fprintf(stderr, "%4d Called!\n", __LINE__);
-	struct aafilter a, *res;
-
-	if (strchr(markmask, '/')) {
-		if (sscanf(markmask, "%i/%i", &a.mark, &a.mask) != 2)
-			return NULL;
-	} else {
-		a.mask = 0xffffffff;
-		if (sscanf(markmask, "%i", &a.mark) != 1)
-			return NULL;
-	}
-
-	res = malloc(sizeof(*res));
-	if (res)
-		memcpy(res, &a, sizeof(a));
-	return res;
+  fprintf(stderr, "Call to unimplemented parse_markmask.\n");
+  exit(1);
+  return NULL;
 }
 
 /*******************************************************************/
@@ -1562,6 +977,9 @@ static void tcp_show_info(const struct nlmsghdr *nlh, struct inet_diag_msg *r,
 	}
 }
 
+// Use this as template to extract the info we need from nlh, to stash
+// away for future printing.
+// TODO also look at netlink APIs for more information.
 static void parse_diag_msg(struct nlmsghdr *nlh, struct sockstat *s)
 {
 	struct rtattr *tb[INET_DIAG_MAX+1];
@@ -1590,6 +1008,7 @@ static void parse_diag_msg(struct nlmsghdr *nlh, struct sockstat *s)
 	else
 		s->local.bytelen = s->remote.bytelen = 16;
 
+        // XXX
 	memcpy(s->local.data, r->id.idiag_src, s->local.bytelen);
 	memcpy(s->remote.data, r->id.idiag_dst, s->local.bytelen);
 }
@@ -1600,13 +1019,13 @@ static int inet_show_sock(struct nlmsghdr *nlh,
 			  struct sockstat *s,
 			  int protocol)
 {
-  // STASH THE DATA HERE.
+  // STASH THE DATA HERE.  (about half the output data)
   if (STASH_DATA) {
     static int count = 0;
     count++;
     if (count % 10 == 0)
       fprintf(stderr, "inet_show_sock suppressed.  Data size = %ld\n",
-              sizeof(struct nlmsghdr) + sizeof(struct sockstat) + sizeof(int));
+              sizeof(struct nlmsghdr) + sizeof(struct sockstat) + sizeof(int) + nlh->nlmsg_len);
     return 0;
   }
         // GFR
@@ -1619,7 +1038,6 @@ static int inet_show_sock(struct nlmsghdr *nlh,
 	if (tb[INET_DIAG_PROTOCOL])
 		protocol = *(__u8 *)RTA_DATA(tb[INET_DIAG_PROTOCOL]);
 
-        if (STASH_DATA) return 0;  // THIS TRAPS ALL OUTPUT FROM THIS FUNCTION
 	inet_stats_print(s, protocol);  // OUTPUT
 
 	if (show_options) {
@@ -1811,6 +1229,7 @@ static int kill_inet_sock(struct nlmsghdr *h, void *arg)
 
 // INTERCEPT
 // stash the data instead of printing.
+// NOTE: addr not used, but it is part of interface!
 static int show_one_inet_sock(const struct sockaddr_nl *addr,
 		struct nlmsghdr *h, void *arg)
 {
@@ -1824,11 +1243,9 @@ static int show_one_inet_sock(const struct sockaddr_nl *addr,
 
 	parse_diag_msg(h, &s);
 
-#if 0
-	if (diag_arg->f->f && run_ssfilter(diag_arg->f->f, &s) == 0)
-		return 0;
-#endif
+        // Deleted f->f related code.
 
+        // This does some data collection (in kill_inet_sock)!
 	if (diag_arg->f->kill && kill_inet_sock(h, arg) != 0) {
 		if (errno == EOPNOTSUPP || errno == ENOENT) {
 			/* Socket can't be closed, or is already closed. */
@@ -1839,15 +1256,6 @@ static int show_one_inet_sock(const struct sockaddr_nl *addr,
 		}
 	}
 
-        // STASH DATA HERE.
-        if (STASH_DATA) {
-          static int count = 0;
-          count++;
-          if (count % 10 == 0)
-             fprintf(stderr, "show_one_inet_sock suppressed.  data size = %ld not including filter!\n",
-                     h->nlmsg_len + sizeof(struct inet_diag_arg));
-          return 0;
-        }
 	err = inet_show_sock(h, &s, diag_arg->protocol);
 	if (err < 0)
 		return err;
@@ -1911,75 +1319,6 @@ Exit:
 	return err;
 }
 
-static int tcp_show_netlink_file(struct filter *f)
-{
-  if (SUPPRESS) {
-    fprintf(stderr, "tcp_show_netlink_file suppressed\n");
-    return 0;
-  }
-	FILE	*fp;
-	char	buf[16384];
-
-	if ((fp = fopen(getenv("TCPDIAG_FILE"), "r")) == NULL) {
-		perror("fopen($TCPDIAG_FILE)");
-		return -1;
-	}
-
-	while (1) {
-		int status, err;
-		struct nlmsghdr *h = (struct nlmsghdr *)buf;
-		struct sockstat s = {};
-
-		status = fread(buf, 1, sizeof(*h), fp);
-		if (status < 0) {
-			perror("Reading header from $TCPDIAG_FILE");
-			return -1;
-		}
-		if (status != sizeof(*h)) {
-			perror("Unexpected EOF reading $TCPDIAG_FILE");
-			return -1;
-		}
-
-		status = fread(h+1, 1, NLMSG_ALIGN(h->nlmsg_len-sizeof(*h)), fp);
-
-		if (status < 0) {
-			perror("Reading $TCPDIAG_FILE");
-			return -1;
-		}
-		if (status + sizeof(*h) < h->nlmsg_len) {
-			perror("Unexpected EOF reading $TCPDIAG_FILE");
-			return -1;
-		}
-
-		/* The only legal exit point */
-		if (h->nlmsg_type == NLMSG_DONE)
-			return 0;
-
-		if (h->nlmsg_type == NLMSG_ERROR) {
-			struct nlmsgerr *err = (struct nlmsgerr *)NLMSG_DATA(h);
-
-			if (h->nlmsg_len < NLMSG_LENGTH(sizeof(struct nlmsgerr))) {
-				fprintf(stderr, "ERROR truncated\n");
-			} else {
-				errno = -err->error;
-				perror("TCPDIAG answered");
-			}
-			return -1;
-		}
-
-		parse_diag_msg(h, &s);
-
-#if 0
-		if (f && f->f && run_ssfilter(f->f, &s) == 0)
-			continue;
-#endif
-
-		err = inet_show_sock(h, &s, IPPROTO_TCP);
-		if (err < 0)
-			return err;
-	}
-}
-
 static int tcp_show(struct filter *f, int socktype)
 {
 	if (!filter_af_get(f, AF_INET) && !filter_af_get(f, AF_INET6)) {
@@ -1988,10 +1327,6 @@ static int tcp_show(struct filter *f, int socktype)
         }
 
 	dg_proto = TCP_PROTO;
-
-	if (getenv("TCPDIAG_FILE")) {
-		return tcp_show_netlink_file(f);
-        }
 
 	if (inet_show_netlink(f, NULL, socktype) == 0) {
 		return 0;
@@ -2092,20 +1427,7 @@ static void unix_stats_print(struct sockstat *list, struct filter *f)
 			}
 		}
 
-#if 0
-		if (use_proc && f->f) {
-			struct sockstat st = {
-				.local.family = AF_UNIX,
-				.remote.family = AF_UNIX,
-			};
-
-			memcpy(st.local.data, &s->name, sizeof(s->name));
-			if (strcmp(peer, "*"))
-				memcpy(st.remote.data, &peer, sizeof(peer));
-			if (run_ssfilter(f->f, &st) == 0)
-				continue;
-		}
-#endif
+                // Deleted f->f related code.
 
 		sock_state_print(s, unix_netid_name(s->type));
 
@@ -2168,10 +1490,7 @@ static int unix_show_sock(const struct sockaddr_nl *addr, struct nlmsghdr *nlh,
 	if (tb[UNIX_DIAG_PEER])
 		stat.rport = rta_getattr_u32(tb[UNIX_DIAG_PEER]);
 
-#if 0
-	if (f->f && run_ssfilter(f->f, &stat) == 0)
-		return 0;
-#endif
+        // Deleted f->f related code.
 
         // STASH DATA HERE.  (200 bytes)
 	unix_stats_print(&stat, f);
@@ -2271,17 +1590,8 @@ static int netlink_show_one(struct filter *f,
 	st.rq	 = rq;
 	st.wq	 = wq;
 
-#if 0
-	if (f->f) {
-		st.local.family = AF_NETLINK;
-		st.remote.family = AF_NETLINK;
-		st.rport = -1;
-		st.lport = pid;
-		st.local.data[0] = prot;
-		if (run_ssfilter(f->f, &st) == 0)
-			return 1;
-	}
-#endif
+        // Deleted f->f related code.
+
 	sock_state_print(&st, "nl");
 
 	if (resolve_services)
