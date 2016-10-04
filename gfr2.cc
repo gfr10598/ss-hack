@@ -1,14 +1,14 @@
 // #include "gfr.h"
 
+#include <cstdio>
 #include <stdint.h>
 #include <stdlib.h>
-#include <cstdio>
-#include <string>
-#include <unordered_map>
 #include <functional>
+#include <string>
+#include <unistd.h>
+#include <unordered_map>
 //#include <hash_bytes.h>
 
-extern "C" void foobar();
 extern "C" int c_main(int argc, char* argv[]);
 
 struct Connection {
@@ -91,11 +91,13 @@ class ConnectionTracker {
 static ConnectionTracker g_tracker;
 
 
-void foobar() {
-  std::fprintf(stderr, "Hello world.\n");
-}
-
 #include "structs.h"
+
+extern "C"
+void finish_round() {
+  g_tracker.FinishRound();
+  sleep(2);
+}
 
 extern "C"
 void stash_data_internal(int family,
@@ -116,5 +118,7 @@ void stash_data_internal(int family,
 int main(int argc, char* argv[]) {
   int r = c_main(argc, argv);
   g_tracker.FinishRound();
+  // r = c_main(argc, argv);
+  //g_tracker.FinishRound();
   return r;
 }

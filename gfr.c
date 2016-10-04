@@ -55,13 +55,10 @@
 int resolve_hosts;
 static int resolve_services = 1;
 int preferred_family = AF_UNSPEC;
-static int show_options;
-static int show_header = 1;
 
 static int netid_width;
 static int state_width;
 static int addrp_width;
-static int addr_width;
 static int serv_width;
 static int screen_width;
 
@@ -770,7 +767,6 @@ int c_main(int argc, char *argv[])
 	int state_filter = 0;
 
 //      -adtuwxiem
-	show_options = 1;
 	filter_db_set(&current_filter, DCCP_DB);
 	filter_db_set(&current_filter, TCP_DB);
 	filter_db_set(&current_filter, UDP_DB);
@@ -832,46 +828,26 @@ int c_main(int argc, char *argv[])
 			state_width++;
 	}
 
-	addrp_width /= 2;
-	addrp_width--;
-
 	serv_width = resolve_services ? 7 : 5;
 
-	if (addrp_width < 15+serv_width+1)
-		addrp_width = 15+serv_width+1;
-
-	addr_width = addrp_width - serv_width - 1;
-
-	if (show_header) {
-		if (netid_width)
-			printf("%-*s ", netid_width, "Netid");
-		if (state_width)
-			printf("%-*s ", state_width, "State");
-		printf("%-6s %-6s ", "Recv-Q", "Send-Q");
-	}
-
 	/* Make enough space for the local/remote port field */
-	addr_width -= 13;
 	serv_width += 13;
-
-	if (show_header) {
-		printf("%*s:%-*s %*s:%-*s\n",
-		       addr_width, "Local Address", serv_width, "Port",
-		       addr_width, "Peer Address", serv_width, "Port");
-	}
-
-	fflush(stdout);
 
 	if (current_filter.dbs & (1<<NETLINK_DB)) {
     fprintf(stderr, "Unimplemented NETLINK_DB code.\n");
     exit(1);
   }
-	if (current_filter.dbs & UNIX_DBM)
-		unix_show(&current_filter);
-	if (current_filter.dbs & (1<<UDP_DB))
-		udp_show(&current_filter);
-	if (current_filter.dbs & (1<<TCP_DB))
-		tcp_show(&current_filter, IPPROTO_TCP);
+	if (current_filter.dbs & UNIX_DBM) unix_show(&current_filter);
+	if (current_filter.dbs & (1<<UDP_DB)) udp_show(&current_filter);
+	if (current_filter.dbs & (1<<TCP_DB)) tcp_show(&current_filter, IPPROTO_TCP);
+	if (current_filter.dbs & (1<<DCCP_DB))
+		tcp_show(&current_filter, IPPROTO_DCCP);
+
+  finish_round();
+
+	if (current_filter.dbs & UNIX_DBM) unix_show(&current_filter);
+	if (current_filter.dbs & (1<<UDP_DB)) udp_show(&current_filter);
+	if (current_filter.dbs & (1<<TCP_DB)) tcp_show(&current_filter, IPPROTO_TCP);
 	if (current_filter.dbs & (1<<DCCP_DB))
 		tcp_show(&current_filter, IPPROTO_DCCP);
 
