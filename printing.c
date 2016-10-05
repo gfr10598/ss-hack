@@ -490,6 +490,7 @@ static void print_skmeminfo(struct rtattr *tb[], int attrtype)
 
 #define TCPI_HAS_OPT(info, opt) !!(info->tcpi_options & (opt))
 
+// TODO - extract code from this to monitor minimum RTT.
 static void tcp_show_info(const struct nlmsghdr *nlh, struct inet_diag_msg *r,
     struct rtattr *tb[])
 {

@@ -3,8 +3,6 @@
 //   entry?
 //   When decoding, we often see !!!Deficit, which come from parse_rtattr.
 
-// #include "gfr.h"
-
 #include <cstdio>
 #include <stdint.h>
 #include <stdlib.h>
@@ -12,7 +10,6 @@
 #include <string>
 #include <unistd.h>
 #include <unordered_map>
-//#include <hash_bytes.h>
 
 #include "structs.h"
 
@@ -24,15 +21,6 @@ int inet_show_sock(const struct nlmsghdr *nlh, struct sockstat *s, int protocol)
 extern "C"
 void parse_diag_msg(const struct nlmsghdr *nlh, struct sockstat *s);
 
-struct Connection {
-  bool operator==(const Connection& other) const {
-    return (family == other.family) && (local_addr == other.local_addr) && (remote_addr == other.remote_addr);
-  }
-  std::string local_addr;
-  std::string remote_addr;
-  int family;
-};
-
 inline void hash_combine(std::size_t& seed) { }
 
 template <typename T, typename... Rest>
@@ -41,19 +29,6 @@ inline void hash_combine(std::size_t& seed, const T& v, Rest... rest) {
     seed ^= hasher(v) + 0x9e3779b9 + (seed<<6) + (seed>>2);
     hash_combine(seed, rest...);
 }
-
-namespace std {
-template<>
-struct hash<Connection> {
-  typedef Connection argument_type;
-  typedef size_t result_type;
-  result_type operator()(const Connection& c) const {
-    size_t seed = c.family;
-    hash_combine(seed, c.local_addr, c.remote_addr);
-    return seed;
-  }
-};
-}  // namespace std
 
 struct Record {
   int round;
