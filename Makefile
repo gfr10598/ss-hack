@@ -1,10 +1,10 @@
 CXXFLAGS= $(WXXFLAGS) -std=c++11 -pthread -O2
 
 SSOBJ=ss.o ssfilter.o
-GFROBJ=gfr.o ssfilter.o gfr2.o printing.o
+POLLING_OBJ=poll_tcpinfo_base.o ssfilter.o poll_tcpinfo.o printing.o
 LNSTATOBJ=lnstat.o lnstat_util.o
 
-TARGETS=gfr ss nstat ifstat rtacct lnstat printing.o
+TARGETS=poll_tcpinfo_base ss nstat ifstat rtacct lnstat printing.o
 
 # Config defined CC, so we override below.
 include ../Config
@@ -25,11 +25,11 @@ endif
 
 all: $(TARGETS)
 
-gfr.o: structs.h gfr.c
+poll_tcpinfo_base.o: structs.h poll_tcpinfo_base.c
 
-gfr2.o: structs.h gfr2.cc
+poll_tcpinfo.o: structs.h poll_tcpinfo.cc
 
-gfr: $(GFROBJ)
+poll_tcpinfo_base: $(POLLING_OBJ)
 	$(QUIET_LINK)$(CXX) $^ $(LDFLAGS) $(LDLIBS) $(LOADLIBES) -std=c++11 -o $@
 
 ss: $(SSOBJ)
