@@ -6,9 +6,7 @@ LNSTATOBJ=lnstat.o lnstat_util.o
 
 TARGETS=poll_tcpinfo ss nstat ifstat rtacct lnstat printing.o
 
-# Config defined CC, so we override below.
 include ../Config
-CXX := g++
 
 ifeq ($(HAVE_BERKELEY_DB),y)
 	TARGETS += arpd
