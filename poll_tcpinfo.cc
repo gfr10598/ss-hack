@@ -53,6 +53,8 @@ class ConnectionTracker {
       entry.protocol = protocol;  // Should we compare against previous?
       entry.msg.swap(data);
     } else {
+      // TODO(gfr) In addition to stashing the data, this should also parse
+      // and compute various stats, e.g. min rtt.
       updates_++;
       if (it->second.round == round_) {
         fprintf(stderr, "!!!!Double update. %d\n", it->second.round);
@@ -67,9 +69,10 @@ class ConnectionTracker {
   void OutputItem(const Record& record) {
     struct sockstat s = {};
         const auto* h = reinterpret_cast<const struct nlmsghdr*>(record.msg.c_str());
+    // TODO(gfr) By default, this should output raw data to a file.  As an
+    // option, it should parse and write to stdout.
     parse_diag_msg(h, &s);
-    // Protocol is IPPROTO_DCCP or IPPROTO_TCP
-    /*err =*/ inet_show_sock(h, &s, record.protocol);
+    inet_show_sock(h, &s, record.protocol);
   }
 
   // Iterate through the map, find any items that are from previous

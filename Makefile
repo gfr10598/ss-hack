@@ -4,7 +4,7 @@ SSOBJ=ss.o ssfilter.o
 POLLING_OBJ=poll_tcpinfo_base.o poll_tcpinfo.o printing.o
 LNSTATOBJ=lnstat.o lnstat_util.o
 
-TARGETS=poll_tcpinfo_base ss nstat ifstat rtacct lnstat printing.o
+TARGETS=poll_tcpinfo ss nstat ifstat rtacct lnstat printing.o
 
 # Config defined CC, so we override below.
 include ../Config
@@ -29,7 +29,7 @@ poll_tcpinfo_base.o: structs.h poll_tcpinfo_base.c
 
 poll_tcpinfo.o: structs.h poll_tcpinfo.cc
 
-poll_tcpinfo_base: $(POLLING_OBJ)
+poll_tcpinfo: $(POLLING_OBJ)
 	$(QUIET_LINK)$(CXX) $^ $(LDFLAGS) $(LDLIBS) $(LOADLIBES) -std=c++11 -o $@
 
 ss: $(SSOBJ)
