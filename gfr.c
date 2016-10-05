@@ -157,92 +157,6 @@ static void filter_merge_defaults(struct filter *f)
 	}
 }
 
-#if 0
-static FILE *ephemeral_ports_open(void)
-{
-	return generic_proc_open("PROC_IP_LOCAL_PORT_RANGE", "sys/net/ipv4/ip_local_port_range");
-}
-
-enum entry_types {
-	USERS,
-	PROC_CTX,
-	PROC_SOCK_CTX
-};
-
-static unsigned long long cookie_sk_get(const uint32_t *cookie)
-{
-	return (((unsigned long long)cookie[1] << 31) << 1) | cookie[0];
-}
-
-static void sock_state_print(struct sockstat *s, const char *sock_name)
-{
-	if (netid_width)
-		printf("%-*s ", netid_width, sock_name);
-	if (state_width)
-		printf("%-*s ", state_width, sstate_name[s->state]);
-
-	printf("%-6d %-6d ", s->rq, s->wq);
-}
-
-static void sock_details_print(struct sockstat *s)
-{
-	if (s->uid)
-		printf(" uid:%u", s->uid);
-
-	printf(" ino:%u", s->ino);
-	printf(" sk:%llx", s->sk);
-
-	if (s->mark)
-		printf(" fwmark:0x%x", s->mark);
-}
-static void sock_addr_print_width(int addr_len, const char *addr, char *delim,
-		int port_len, const char *port, const char *ifname)
-{
-	if (ifname) {
-		printf("%*s%%%s%s%-*s ", addr_len, addr, ifname, delim,
-				port_len, port);
-	} else {
-		printf("%*s%s%-*s ", addr_len, addr, delim, port_len, port);
-	}
-}
-
-static const char *tmr_name[] = {
-	"off",
-	"on",
-	"keepalive",
-	"timewait",
-	"persist",
-	"unknown"
-};
-
-static const char *print_ms_timer(int timeout)
-{
-	static char buf[64];
-	int secs, msecs, minutes;
-
-	if (timeout < 0)
-		timeout = 0;
-	secs = timeout/1000;
-	minutes = secs/60;
-	secs = secs%60;
-	msecs = timeout%1000;
-	buf[0] = 0;
-	if (minutes) {
-		msecs = 0;
-		snprintf(buf, sizeof(buf)-16, "%dmin", minutes);
-		if (minutes > 9)
-			secs = 0;
-	}
-	if (secs) {
-		if (secs > 9)
-			msecs = 0;
-		sprintf(buf+strlen(buf), "%d%s", secs, msecs ? "." : "sec");
-	}
-	if (msecs)
-		sprintf(buf+strlen(buf), "%03dms", msecs);
-	return buf;
-}
-#endif
 struct scache {
 	struct scache *next;
 	int port;
@@ -251,66 +165,6 @@ struct scache {
 };
 
 struct scache *rlist;
-
-#if 0
-/* Even do not try default linux ephemeral port ranges:
- * default /etc/services contains so much of useless crap
- * wouldbe "allocated" to this area that resolution
- * is really harmful. I shrug each time when seeing
- * "socks" or "cfinger" in dumps.
- */
-static int is_ephemeral(int port)
-{
-	static int min = 0, max;
-
-	if (!min) {
-		FILE *f = ephemeral_ports_open();
-
-		if (!f || fscanf(f, "%d %d", &min, &max) < 2) {
-			min = 1024;
-			max = 4999;
-		}
-		if (f)
-			fclose(f);
-	}
-	return port >= min && port <= max;
-}
-#endif
-#if 0
-static void inet_addr_print(const inet_prefix *a, int port, unsigned int ifindex)
-{
-	char buf[1024];
-	const char *ap = buf;
-	int est_len = addr_width;
-	const char *ifname = NULL;
-
-	if (a->family == AF_INET) {
-		if (a->data[0] == 0) {
-			buf[0] = '*';
-			buf[1] = 0;
-		} else {
-			ap = format_host(AF_INET, 4, a->data);
-		}
-	} else {
-		ap = format_host(a->family, 16, a->data);
-		est_len = strlen(ap);
-		if (est_len <= addr_width)
-			est_len = addr_width;
-		else
-			est_len = addr_width + ((est_len-addr_width+3)/4)*4;
-	}
-
-	if (ifindex) {
-		ifname   = ll_index_to_name(ifindex);
-		est_len -= strlen(ifname) + 1;  /* +1 for percent char */
-		if (est_len < 0)
-			est_len = 0;
-	}
-
-	sock_addr_print_width(est_len, ap, ":", serv_width, resolve_service(port),
-			ifname);
-}
-#endif
 
 struct aafilter {
 	inet_prefix	addr;
@@ -352,25 +206,27 @@ void *parse_markmask(const char *markmask)
 
 /*******************************************************************/
 
+struct inet_diag_arg {
+	struct filter *f;
+	int protocol;
+	struct rtnl_handle *rth;
+};
+
+// External
 void stash_data(char *loc, char* rem, char* data, int family);
 
 // External
-void stash_data_internal(int family,
+void stash_data_internal(int family, int protocol,
                          const struct inet_diag_sockid id,
                          const struct nlmsghdr *nlh);
 
 static int stash_inet(const struct sockaddr_nl *addr,
 		struct nlmsghdr *nlh, void *arg) {
+  struct inet_diag_arg *diag_arg = arg;
   // Need to compute the key, and stash the appropriate amount of data.
   // We will need the inet_diag_sockid, and maybe the family and state?
   struct inet_diag_msg *r = NLMSG_DATA(nlh);
-  // I've set up the state filter to only request SS_ESTABLISHED, so
-  // this may be redundant.
-  if (r->idiag_state == SS_ESTABLISHED) {
-    stash_data_internal(r->idiag_family, r->id, nlh);
-  } else {
-    fprintf(stderr, "Saw a non established!\n");
-  }
+  stash_data_internal(r->idiag_family, diag_arg->protocol, r->id, nlh);
   return 0;
 }
 
@@ -399,8 +255,10 @@ static int tcpdiag_send(int fd, int protocol, struct filter *ff)
 
 	if (protocol == IPPROTO_TCP)
 		req.nlh.nlmsg_type = TCPDIAG_GETSOCK;
-	else
+	else {
 		req.nlh.nlmsg_type = DCCPDIAG_GETSOCK;
+                fprintf(stderr, "Protocol = %d\n", protocol);
+        }
   // show_mem
 	req.r.idiag_ext |= (1<<(INET_DIAG_MEMINFO-1));
 	req.r.idiag_ext |= (1<<(INET_DIAG_SKMEMINFO-1));
@@ -453,8 +311,10 @@ static int sockdiag_send(int family, int fd, int protocol, struct filter *f)
 	struct iovec iov[3];
 	int iovlen = 1;
 
-	if (family == PF_UNSPEC)
+	if (family == PF_UNSPEC) {
+          fprintf(stderr, "!!!!!!!!!!Unspecified family.\n");
 		return tcpdiag_send(fd, protocol, f);
+        }
 
 	memset(&req.r, 0, sizeof(req.r));
 	req.r.sdiag_family = family;
@@ -500,31 +360,6 @@ static int sockdiag_send(int family, int fd, int protocol, struct filter *f)
 	return 0;
 }
 
-struct inet_diag_arg {
-	struct filter *f;
-	int protocol;
-	struct rtnl_handle *rth;
-};
-
-#if 0
-static int kill_inet_sock(struct nlmsghdr *h, void *arg)
-{
-	struct inet_diag_msg *d = NLMSG_DATA(h);
-	struct inet_diag_arg *diag_arg = arg;
-	struct rtnl_handle *rth = diag_arg->rth;
-
-	DIAG_REQUEST(req, struct inet_diag_req_v2 r);
-
-	req.nlh.nlmsg_type = SOCK_DESTROY;
-	req.nlh.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
-	req.nlh.nlmsg_seq = ++rth->seq;
-	req.r.sdiag_family = d->idiag_family;
-	req.r.sdiag_protocol = diag_arg->protocol;
-	req.r.id = d->id;
-
-	return rtnl_talk(rth, &req.nlh, NULL, 0);
-}
-#endif
 // This generates majority, but not all, of the output for
 // misc/gfr -t -i -H -e -u -x -a -m
 static int inet_show_netlink(struct filter *f, FILE *dump_fp, int protocol)
@@ -624,11 +459,8 @@ int c_main(int argc, char *argv[])
 	FILE *filter_fp = NULL;
 	int state_filter = 0;
 
-//      -adtuwiem   Leaving out -x (unix) for now.
-	filter_db_set(&current_filter, DCCP_DB);
+//      -tieom
 	filter_db_set(&current_filter, TCP_DB);
-	filter_db_set(&current_filter, UDP_DB);
-	filter_db_set(&current_filter, RAW_DB);
 	state_filter = 1 << SS_ESTABLISHED;
 
 	argc -= optind;
@@ -687,7 +519,6 @@ int c_main(int argc, char *argv[])
 
 	serv_width = resolve_services ? 7 : 5;
 
-	/* Make enough space for the local/remote port field */
 	serv_width += 13;
 
 	if (current_filter.dbs & (1<<NETLINK_DB)) {
@@ -695,7 +526,7 @@ int c_main(int argc, char *argv[])
     exit(1);
   }
   int i;
-  for (i = 0; i < 60; i++) {
+  for (i = 0; i < 30; i++) {
 //	if (current_filter.dbs & UNIX_DBM) unix_show(&current_filter);
 	if (current_filter.dbs & (1<<UDP_DB)) udp_show(&current_filter);
 	if (current_filter.dbs & (1<<TCP_DB)) tcp_show(&current_filter, IPPROTO_TCP);

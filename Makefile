@@ -1,7 +1,7 @@
 CXXFLAGS= $(WXXFLAGS) -std=c++11 -pthread -O2
 
 SSOBJ=ss.o ssfilter.o
-GFROBJ=gfr.o ssfilter.o gfr2.o
+GFROBJ=gfr.o ssfilter.o gfr2.o printing.o
 LNSTATOBJ=lnstat.o lnstat_util.o
 
 TARGETS=gfr ss nstat ifstat rtacct lnstat printing.o

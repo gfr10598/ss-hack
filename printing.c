@@ -145,44 +145,6 @@ struct scache {
 
 struct scache *rlist;
 
-static void init_service_resolver(void)
-{
-	char buf[128];
-	FILE *fp = popen("/usr/sbin/rpcinfo -p 2>/dev/null", "r");
-
-	if (!fp)
-		return;
-
-	if (!fgets(buf, sizeof(buf), fp)) {
-		pclose(fp);
-		return;
-	}
-	while (fgets(buf, sizeof(buf), fp) != NULL) {
-		unsigned int progn, port;
-		char proto[128], prog[128] = "rpc.";
-		struct scache *c;
-
-		if (sscanf(buf, "%u %*d %s %u %s",
-			   &progn, proto, &port, prog+4) != 4)
-			continue;
-
-		if (!(c = malloc(sizeof(*c))))
-			continue;
-
-		c->port = port;
-		c->name = strdup(prog);
-		if (strcmp(proto, TCP_PROTO) == 0)
-			c->proto = TCP_PROTO;
-		else if (strcmp(proto, UDP_PROTO) == 0)
-			c->proto = UDP_PROTO;
-		else
-			c->proto = NULL;
-		c->next = rlist;
-		rlist = c;
-	}
-	pclose(fp);
-}
-
 /* Even do not try default linux ephemeral port ranges:
  * default /etc/services contains so much of useless crap
  * wouldbe "allocated" to this area that resolution
@@ -660,14 +622,15 @@ static void tcp_show_info(const struct nlmsghdr *nlh, struct inet_diag_msg *r,
 // Use this as template to extract the info we need from nlh, to stash
 // away for future printing.
 // TODO also look at netlink APIs for more information.
-static void parse_diag_msg(struct nlmsghdr *nlh, struct sockstat *s)
+void parse_diag_msg(const struct nlmsghdr *nlh, struct sockstat *s)
 {
 	struct rtattr *tb[INET_DIAG_MAX+1];
 	struct inet_diag_msg *r = NLMSG_DATA(nlh);
 
+#if 0
 	parse_rtattr(tb, INET_DIAG_MAX, (struct rtattr *)(r+1),
 		     nlh->nlmsg_len - NLMSG_LENGTH(sizeof(*r)));
-
+#endif
 	s->state	= r->idiag_state;
   // We need this to determine the number of bytes in the addresses.
 	s->local.family	= s->remote.family = r->idiag_family;
@@ -680,11 +643,12 @@ static void parse_diag_msg(struct nlmsghdr *nlh, struct sockstat *s)
 	s->iface	= r->id.idiag_if;
 //	s->sk		= cookie_sk_get(&r->id.idiag_cookie[0]);
 
+#if 0
   // Probably don't need this
 	s->mark = 0;
 	if (tb[INET_DIAG_MARK])
 		s->mark = *(__u32 *) RTA_DATA(tb[INET_DIAG_MARK]);
-
+#endif
 	if (s->local.family == AF_INET)
 		s->local.bytelen = s->remote.bytelen = 4;
 	else
@@ -694,15 +658,14 @@ static void parse_diag_msg(struct nlmsghdr *nlh, struct sockstat *s)
 	memcpy(s->remote.data, r->id.idiag_dst, s->local.bytelen);
 }
 
-// This is called indirectly by rtnl_dump_filter to do the printing.
-// INTERCEPT - modify this to stash the data!!
-static int inet_show_sock(struct nlmsghdr *nlh,
+int inet_show_sock(const struct nlmsghdr *nlh,
 			  struct sockstat *s,
 			  int protocol)
 {
 	struct rtattr *tb[INET_DIAG_MAX+1];
 	struct inet_diag_msg *r = NLMSG_DATA(nlh);
 
+  // TODO - this is resulting in !!Deficit messages.
 	parse_rtattr(tb, INET_DIAG_MAX, (struct rtattr *)(r+1),
 		     nlh->nlmsg_len - NLMSG_LENGTH(sizeof(*r)));
 
@@ -747,48 +710,6 @@ struct inet_diag_arg {
 	int protocol;
 	struct rtnl_handle *rth;
 };
-
-static int show_one_inet_sock(const struct sockaddr_nl *addr,
-		struct nlmsghdr *h, void *arg)
-{
-	int err;
-	struct inet_diag_arg *diag_arg = arg;  // Used only to find protocol.
-//	struct inet_diag_msg *r = NLMSG_DATA(h);
-	struct sockstat s = {};
-
-#if 0
-	if (!(diag_arg->f->families & (1 << r->idiag_family))) {
-	  fprintf(stderr, "%4d Filtered.\n", __LINE__);
-	  return 0;
-    }
-#endif
-
-	parse_diag_msg(h, &s);
-
-#if 0
-	if (diag_arg->f->f && run_ssfilter(diag_arg->f->f, &s) == 0) {
-	  fprintf(stderr, "%4d Filtered.\n", __LINE__);
-	  return 0;
-    }
-
-	if (diag_arg->f->kill && kill_inet_sock(h, arg) != 0) {
-      fprintf(stderr, "%4d Filtered.\n", __LINE__);
-		if (errno == EOPNOTSUPP || errno == ENOENT) {
-			/* Socket can't be closed, or is already closed. */
-			return 0;
-		} else {
-			perror("SOCK_DESTROY answers");
-			return -1;
-		}
-	}
-#endif
-
-	err = inet_show_sock(h, &s, diag_arg->protocol);
-	if (err < 0)
-		return err;
-
-	return 0;
-}
 
 static const char *unix_netid_name(int type)
 {
@@ -874,65 +795,3 @@ static void unix_stats_print(struct sockstat *list, struct filter *f)
 	}
 }
 
-// INTERCEPT
-// instead of printing stuff here, stash it away and only print when the socket
-// disappears.
-static int unix_show_sock(const struct sockaddr_nl *addr, struct nlmsghdr *nlh,
-		void *arg)
-{
-	struct filter *f = (struct filter *)arg;
-	struct unix_diag_msg *r = NLMSG_DATA(nlh);
-	struct rtattr *tb[UNIX_DIAG_MAX+1];
-	char name[128];
-	struct sockstat stat = { .name = "*", .peer_name = "*" };
-
-	parse_rtattr(tb, UNIX_DIAG_MAX, (struct rtattr *)(r+1),
-		     nlh->nlmsg_len - NLMSG_LENGTH(sizeof(*r)));
-
-	stat.type  = r->udiag_type;
-	stat.state = r->udiag_state;
-	stat.ino   = stat.lport = r->udiag_ino;
-	stat.local.family = stat.remote.family = AF_UNIX;
-
-	if (unix_type_skip(&stat, f)) {
-      fprintf(stderr, "%4d Skipped.\n", __LINE__);
-	  return 0;
-    }
-
-	if (tb[UNIX_DIAG_RQLEN]) {
-		struct unix_diag_rqlen *rql = RTA_DATA(tb[UNIX_DIAG_RQLEN]);
-
-		stat.rq = rql->udiag_rqueue;
-		stat.wq = rql->udiag_wqueue;
-	}
-	if (tb[UNIX_DIAG_NAME]) {
-		int len = RTA_PAYLOAD(tb[UNIX_DIAG_NAME]);
-
-		memcpy(name, RTA_DATA(tb[UNIX_DIAG_NAME]), len);
-		name[len] = '\0';
-		if (name[0] == '\0')
-			name[0] = '@';
-		stat.name = &name[0];
-		memcpy(stat.local.data, &stat.name, sizeof(stat.name));
-	}
-	if (tb[UNIX_DIAG_PEER])
-		stat.rport = rta_getattr_u32(tb[UNIX_DIAG_PEER]);
-
-    // Deleted f->f related code.
-
-	unix_stats_print(&stat, f);
-
-    // show_mem
-	printf("\t");
-	print_skmeminfo(tb, UNIX_DIAG_MEMINFO);
-    // show_details
-	if (tb[UNIX_DIAG_SHUTDOWN]) {
-		unsigned char mask;
-
-		mask = *(__u8 *)RTA_DATA(tb[UNIX_DIAG_SHUTDOWN]);
-		printf(" %c-%c", mask & 1 ? '-' : '<', mask & 2 ? '-' : '>');
-	}
-	printf("\n");
-
-	return 0;
-}
