@@ -16,7 +16,9 @@
 
 #include "structs.h"
 
-extern "C" int c_main(int argc, char* argv[]);
+#define VERBOSE 0
+
+extern "C" int c_main(void);
 extern "C"
 int inet_show_sock(const struct nlmsghdr *nlh, struct sockstat *s, int protocol);
 extern "C"
@@ -89,33 +91,20 @@ class ConnectionTracker {
 
   // Where do we get the protocol??
   void OutputItem(const Record& record) {
-	struct sockstat s = {};
+    struct sockstat s = {};
         const auto* h = reinterpret_cast<const struct nlmsghdr*>(record.msg.c_str());
-	parse_diag_msg(h, &s);
-  // Protocol is IPPROTO_DCCP or IPPROTO_TCP
-	/*err =*/ inet_show_sock(h, &s, record.protocol);
+    parse_diag_msg(h, &s);
+    // Protocol is IPPROTO_DCCP or IPPROTO_TCP
+    /*err =*/ inet_show_sock(h, &s, record.protocol);
   }
 
   // Iterate through the map, find any items that are from previous
   // round, and take action on them.
   void FinishRound() {
-    // size_after_last_round_ is the number of items in the cache before updates.
-    // updates_ is the number of items updated in the cache.
-    // new_items is the number of new items added to the cache.
-    fprintf(stderr, "Added: %4d, Updated: %4d, Removing %4ld\n",
-            new_items_, updates_, size_after_last_round_ - updates_);
-#if 0
-    if (size_after_last_round_ == updates_) {
-      if (size() != new_items_ + updates_) {
-        fprintf(stderr, "!!!CHECK: %lu != %d + %d\n", size(), updates_, new_items_);
-      }
-      size_after_last_round_ = size();
-      updates_ = 0;
-      new_items_ = 0;
-      ++round_;  // Don't care about wrapping.
-      return;
+    if (VERBOSE) {
+      fprintf(stderr, "Added: %4d, Updated: %4d, Removing %4ld\n",
+              new_items_, updates_, size_after_last_round_ - updates_);
     }
-#endif
     long ignored = 0;
     long erased = 0;
     int expired_count = 0;
@@ -131,14 +120,19 @@ class ConnectionTracker {
       }
     }
     ++round_;  // Don't care about wrapping.
-    fprintf(stderr, "map has %lu entries.  Retained: %ld,  Reported: %ld\n", size(), ignored, erased);
+    if (VERBOSE) {
+      fprintf(stderr, "map has %lu entries.  Retained: %ld,  Reported: %ld\n",
+              size(), ignored, erased);
+    }
 
     // TODO Expect that size() = new_items_ + updates_.
     if (size() != new_items_ + updates_) {
-      fprintf(stderr, "%4d !!!CHECK: %lu != %d + %d\n", __LINE__, size(), updates_, new_items_);
+      fprintf(stderr, "%4d !!!CHECK: %lu != %d + %d\n", __LINE__,
+              size(), updates_, new_items_);
     }
     if (size_after_last_round_ != expired_count + updates_) {
-      fprintf(stderr, "%4d !!!CHECK: %lu != %d + %d\n", __LINE__, size_after_last_round_, expired_count, updates_);
+      fprintf(stderr, "%4d !!!CHECK: %lu != %d + %d\n", __LINE__,
+              size_after_last_round_, expired_count, updates_);
     }
     size_after_last_round_ = size();
     updates_ = 0;
@@ -150,10 +144,9 @@ class ConnectionTracker {
   }
 
  private:
-  // TODO(gfr) Consider having separate map for each family.
   ConnectionMap connections_;
-  int round_ = 1;  // First round is round 0.
-  size_t size_after_last_round_ = 0; // Items count after last FinishRound.
+  int round_ = 1;
+  size_t size_after_last_round_ = 0; // Item count after last FinishRound.
   unsigned updates_ = 0;  // Items updated since last FinishRound.
   unsigned new_items_ = 0;  // New items added since last FinishRound.
 };
@@ -186,6 +179,6 @@ void stash_data_internal(int family, int protocol,
 }
 
 int main(int argc, char* argv[]) {
-  int r = c_main(argc, argv);
+  int r = c_main();
   return r;
 }
