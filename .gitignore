@@ -1,0 +1,12 @@
+*.o
+arpd
+ifstat
+ss
+ssfilter.c
+ssfilter.y
+nstat
+lnstat
+rtacct
+tags
+poll_tcpinfo
+poll_tcpinfo_base
