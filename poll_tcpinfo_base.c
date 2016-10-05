@@ -28,8 +28,7 @@
 
 #include "structs.h"
 
-int c_main(void);
-void finish_round(void);
+int poll(void);
 void stash_data_internal(int family, int protocol,
                          const struct inet_diag_sockid id,
                          const struct nlmsghdr *nlh);
@@ -117,8 +116,6 @@ static const struct filter default_afs[AF_MAX] = {
 };
 
 static int do_default = 1;
-// This is for the YACC filter in ssfilter.*.
-// It is used to ...
 static struct filter current_filter;
 
 static void filter_db_set(struct filter *f, int db)
@@ -169,45 +166,11 @@ struct scache {
 
 struct scache *rlist;
 
-static int ssfilter_bytecompile(struct ssfilter *f, char **bytecode) {
-  fprintf(stderr, "Call to unimplemented ssfilter_bytecompile!\n");
-  exit(1);
-  return 0;
-}
-
-/*******************************************************************
- * Code for ssfilter (yacc).
- ******************************************************************/
-void *parse_devcond(char *name)
-{
-  fprintf(stderr, "Call to unimplemented parse_devcond.\n");
-  exit(1);
-  return NULL;
-}
-
-void *parse_hostcond(char *addr, bool is_port) {
-  fprintf(stderr, "Call to unimplemented parse_hostcond.\n");
-  exit(1);
-  return NULL;
-}
-
-void *parse_markmask(const char *markmask)
-{
-  fprintf(stderr, "Call to unimplemented parse_markmask.\n");
-  exit(1);
-  return NULL;
-}
-
-/*******************************************************************/
-
 struct inet_diag_arg {
   struct filter *f;
   int protocol;
   struct rtnl_handle *rth;
 };
-
-// External
-void stash_data(char *loc, char* rem, char* data, int family);
 
 // External
 void stash_data_internal(int family, int protocol,
@@ -237,10 +200,7 @@ static int tcpdiag_send(int fd, int protocol, struct filter *ff)
     .r.idiag_family = AF_INET,
     .r.idiag_states = ff->states,
   };
-  char    *bc = NULL;
-  int bclen;
   struct msghdr msg;
-  struct rtattr rta;
   struct iovec iov[3];
   int iovlen = 1;
 
@@ -266,18 +226,6 @@ static int tcpdiag_send(int fd, int protocol, struct filter *ff)
     .iov_base = &req,
     .iov_len = sizeof(req)
   };
-  if (ff->f) {
-    // TODO - never executed.
-    bclen = ssfilter_bytecompile(ff->f, &bc);
-    if (bclen) {
-      rta.rta_type = INET_DIAG_REQ_BYTECODE;
-      rta.rta_len = RTA_LENGTH(bclen);
-      iov[1] = (struct iovec){ &rta, sizeof(rta) };
-      iov[2] = (struct iovec){ bc, bclen };
-      req.nlh.nlmsg_len += RTA_LENGTH(bclen);
-      iovlen = 3;
-    }
-  }
 
   msg = (struct msghdr) {
     .msg_name = (void *)&nladdr,
@@ -298,10 +246,7 @@ static int sockdiag_send(int family, int fd, int protocol, struct filter *f)
 {
   struct sockaddr_nl nladdr = { .nl_family = AF_NETLINK };
   DIAG_REQUEST(req, struct inet_diag_req_v2 r);
-  char    *bc = NULL;
-  int bclen;
   struct msghdr msg;
-  struct rtattr rta;
   struct iovec iov[3];
   int iovlen = 1;
 
@@ -327,17 +272,6 @@ static int sockdiag_send(int family, int fd, int protocol, struct filter *f)
     .iov_base = &req,
     .iov_len = sizeof(req)
   };
-  if (f->f) {
-    bclen = ssfilter_bytecompile(f->f, &bc);
-    if (bclen) {
-      rta.rta_type = INET_DIAG_REQ_BYTECODE;
-      rta.rta_len = RTA_LENGTH(bclen);
-      iov[1] = (struct iovec){ &rta, sizeof(rta) };
-      iov[2] = (struct iovec){ bc, bclen };
-      req.nlh.nlmsg_len += RTA_LENGTH(bclen);
-      iovlen = 3;
-    }
-  }
 
   msg = (struct msghdr) {
     .msg_name = (void *)&nladdr,
@@ -441,9 +375,8 @@ struct sock_diag_msg {
   __u8 sdiag_family;
 };
 
-int c_main(void)
+int poll(void)
 {
-  FILE *filter_fp = NULL;
   int state_filter = 0;
 
 //      -tieom
@@ -454,13 +387,6 @@ int c_main(void)
 
   filter_states_set(&current_filter, state_filter);
   filter_merge_defaults(&current_filter);
-
-  int argc = 0;
-  char *argv[0];
-  if (ssfilter_parse(&current_filter.f, argc, argv, filter_fp)) {
-    fprintf(stderr, "No options!\n");
-    exit(1);
-  }
 
   netid_width = 0;
   if (current_filter.dbs&(current_filter.dbs-1))
@@ -496,18 +422,9 @@ int c_main(void)
 
   serv_width += 13;
 
-  if (current_filter.dbs & (1<<NETLINK_DB)) {
-    fprintf(stderr, "Unimplemented NETLINK_DB code.\n");
-    exit(1);
-  }
-  int i;
-  for (i = 0; i < 30; i++) {
   if (current_filter.dbs & (1<<UDP_DB)) udp_show(&current_filter);
   if (current_filter.dbs & (1<<TCP_DB)) tcp_show(&current_filter, IPPROTO_TCP);
   if (current_filter.dbs & (1<<DCCP_DB))
     tcp_show(&current_filter, IPPROTO_DCCP);
-
-    finish_round();
-  }
   return 0;
 }

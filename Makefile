@@ -1,7 +1,7 @@
 CXXFLAGS= $(WXXFLAGS) -std=c++11 -pthread -O2
 
 SSOBJ=ss.o ssfilter.o
-POLLING_OBJ=poll_tcpinfo_base.o ssfilter.o poll_tcpinfo.o printing.o
+POLLING_OBJ=poll_tcpinfo_base.o poll_tcpinfo.o printing.o
 LNSTATOBJ=lnstat.o lnstat_util.o
 
 TARGETS=poll_tcpinfo_base ss nstat ifstat rtacct lnstat printing.o

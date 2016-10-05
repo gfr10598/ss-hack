@@ -1,8 +1,7 @@
-// TODO:
-//   Sometimes we see Removing N, Reported: 0.  No data associated with an
-//   entry?
-//   When decoding, we often see !!!Deficit, which come from parse_rtattr.
-
+// NOTES:
+//   The polling loop takes about 3 msec on my workstation.  This seems to be
+//   somewhat independent of the number of connections reported.
+//
 #include <cstdio>
 #include <stdint.h>
 #include <stdlib.h>
@@ -15,7 +14,7 @@
 
 #define VERBOSE 0
 
-extern "C" int c_main(void);
+extern "C" int poll(void);
 extern "C"
 int inet_show_sock(const struct nlmsghdr *nlh, struct sockstat *s, int protocol);
 extern "C"
@@ -129,12 +128,6 @@ class ConnectionTracker {
 static ConnectionTracker g_tracker;
 
 extern "C"
-void finish_round() {
-  g_tracker.FinishRound();
-  sleep(1);
-}
-
-extern "C"
 void stash_data_internal(int family, int protocol,
                          const struct inet_diag_sockid id,
                          const struct nlmsghdr *nlh) {
@@ -154,6 +147,12 @@ void stash_data_internal(int family, int protocol,
 }
 
 int main(int argc, char* argv[]) {
-  int r = c_main();
-  return r;
+  for (int i = 0; i < 30; ++i) {
+    int r = poll();
+    if (r != 0) return r;
+
+    g_tracker.FinishRound();
+    sleep(1);
+  }
+  return 0;
 }
