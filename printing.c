@@ -10,16 +10,65 @@
 //  2. verifying that the binary data stashed by sidestream matches
 //     the data saved by ss.c ???
 
+#include <errno.h>
 #include <netdb.h>  // setservent
+
+#include "rt_names.h"
 
 #include "structs.h"
 
-#include <errno.h>
-#include "rt_names.h"
+struct dctcpstat {
+  unsigned int  ce_state;
+  unsigned int  alpha;
+  unsigned int  ab_ecn;
+  unsigned int  ab_tot;
+  bool    enabled;
+};
 
-void parse_diag_msg(const struct nlmsghdr *nlh, struct sockstat *s);
-int inet_show_sock(
-    const struct nlmsghdr *nlh, struct sockstat *s, int protocol);
+struct tcpstat {
+  struct sockstat     ss;
+  int       timer;
+  int       timeout;
+  int       probes;
+  char        cong_alg[16];
+  double        rto, ato, rtt, rttvar;
+  int       qack, ssthresh, backoff;
+  double        send_bps;
+  int       snd_wscale;
+  int       rcv_wscale;
+  int       mss;
+  unsigned int      cwnd;
+  unsigned int      lastsnd;
+  unsigned int      lastrcv;
+  unsigned int      lastack;
+  double        pacing_rate;
+  double        pacing_rate_max;
+  unsigned long long  bytes_acked;
+  unsigned long long  bytes_received;
+  unsigned int      segs_out;
+  unsigned int      segs_in;
+  unsigned int      data_segs_out;
+  unsigned int      data_segs_in;
+  unsigned int      unacked;
+  unsigned int      retrans;
+  unsigned int      retrans_total;
+  unsigned int      lost;
+  unsigned int      sacked;
+  unsigned int      fackets;
+  unsigned int      reordering;
+  unsigned int      not_sent;
+  double        rcv_rtt;
+  double        min_rtt;
+  int       rcv_space;
+  bool        has_ts_opt;
+  bool        has_sack_opt;
+  bool        has_ecn_opt;
+  bool        has_ecnseen_opt;
+  bool        has_fastopen_opt;
+  bool        has_wscale_opt;
+  struct dctcpstat    *dctcp;
+  struct tcp_bbr_info *bbr_info;
+};
 
 int resolve_services = 1;
 

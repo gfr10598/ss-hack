@@ -1,14 +1,17 @@
 // TODO(gfr) separate out printing code from collection code.
 
 /*
- * Derived from iproute2 ss.c
+ * Derived from iproute2 ss.c.  Forked from net-next in Sept 2016.
+ * Much of the content has been left close in form to the original
+ * to make it clearer what the relationships are with the ss.c code.
+ * Most of the ss.c code is not needed, and therefore stripped out.
  *
  *    This program is free software; you can redistribute it and/or
  *    modify it under the terms of the GNU General Public License
  *    as published by the Free Software Foundation; either version
  *    2 of the License, or (at your option) any later version.
  *
- * Authors: Alexey Kuznetsov, <kuznet@ms2.inr.ac.ru>
+ * Original ss.c Author: Alexey Kuznetsov, <kuznet@ms2.inr.ac.ru>
  */
 
 #include <stdio.h>
@@ -28,10 +31,6 @@
 
 #include "structs.h"
 
-int poll(void);
-void stash_data_internal(int family, int protocol,
-                         const struct inet_diag_sockid id,
-                         const struct nlmsghdr *nlh);
 
 int resolve_hosts;
 static int resolve_services = 1;
@@ -44,7 +43,6 @@ static int screen_width;
 
 static const char *TCP_PROTO = "tcp";
 static const char *UDP_PROTO = "udp";
-//static const char *RAW_PROTO = "raw";
 static const char *dg_proto;
 
 #define MAGIC_SEQ 123456
@@ -91,6 +89,11 @@ static const struct filter default_dbs[MAX_DB] = {
     .families = (1 << AF_NETLINK),
   },
 };
+
+#define PACKET_DBM ((1<<PACKET_DG_DB)|(1<<PACKET_R_DB))
+#define UNIX_DBM ((1<<UNIX_DG_DB)|(1<<UNIX_ST_DB)|(1<<UNIX_SQ_DB))
+#define ALL_DB ((1<<MAX_DB)-1)
+#define INET_DBM ((1<<TCP_DB)|(1<<UDP_DB)|(1<<DCCP_DB)|(1<<RAW_DB))
 
 static const struct filter default_afs[AF_MAX] = {
   [AF_INET] = {
@@ -157,25 +160,11 @@ static void filter_merge_defaults(struct filter *f)
   }
 }
 
-struct scache {
-  struct scache *next;
-  int port;
-  char *name;
-  const char *proto;
-};
-
-struct scache *rlist;
-
 struct inet_diag_arg {
   struct filter *f;
   int protocol;
   struct rtnl_handle *rth;
 };
-
-// External
-void stash_data_internal(int family, int protocol,
-                         const struct inet_diag_sockid id,
-                         const struct nlmsghdr *nlh);
 
 static int stash_inet(const struct sockaddr_nl *addr,
     struct nlmsghdr *nlh, void *arg) {
@@ -241,6 +230,19 @@ static int tcpdiag_send(int fd, int protocol, struct filter *ff)
 
   return 0;
 }
+
+#define DIAG_REQUEST(_req, _r)                \
+  struct {                  \
+    struct nlmsghdr nlh;              \
+    _r;                 \
+  } _req = {                  \
+    .nlh = {                \
+      .nlmsg_type = SOCK_DIAG_BY_FAMILY,        \
+      .nlmsg_flags = NLM_F_ROOT|NLM_F_MATCH|NLM_F_REQUEST,\
+      .nlmsg_seq = MAGIC_SEQ,           \
+      .nlmsg_len = sizeof(_req),          \
+    },                  \
+  }
 
 static int sockdiag_send(int family, int fd, int protocol, struct filter *f)
 {

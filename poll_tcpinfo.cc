@@ -2,23 +2,20 @@
 //   The polling loop takes about 3 msec on my workstation.  This seems to be
 //   somewhat independent of the number of connections reported.
 //
+#include <ctime>
 #include <cstdio>
-#include <stdint.h>
-#include <stdlib.h>
+#include <fstream>
 #include <functional>
 #include <string>
-#include <unistd.h>
 #include <unordered_map>
+
+#include <stdint.h>
+#include <stdlib.h>
+#include <unistd.h>
 
 #include "structs.h"
 
 #define VERBOSE 0
-
-extern "C" int poll(void);
-extern "C"
-int inet_show_sock(const struct nlmsghdr *nlh, struct sockstat *s, int protocol);
-extern "C"
-void parse_diag_msg(const struct nlmsghdr *nlh, struct sockstat *s);
 
 inline void hash_combine(std::size_t& seed) { }
 
@@ -130,7 +127,6 @@ class ConnectionTracker {
 
 static ConnectionTracker g_tracker;
 
-extern "C"
 void stash_data_internal(int family, int protocol,
                          const struct inet_diag_sockid id,
                          const struct nlmsghdr *nlh) {
@@ -148,6 +144,37 @@ void stash_data_internal(int family, int protocol,
   std::string data(reinterpret_cast<const char*>(nlh), nlh->nlmsg_len);
   g_tracker.StashData(key, protocol, std::move(data));
 }
+
+// We anticipate new log records at on the order of < 1/second, or <3600/hr.
+// Break the log into roughly hoursly files, with the file name indicating the
+// GMT hour that its data falls into.
+// 1. Keep track of the hour that was used to create the current filename.
+// 2. Check on each write to the file to see if the hour has turned over.  If
+//    it has, then close that file and open a new one.
+class TCPInfoLog {
+ public:
+  // Ensures that the correct file is open.
+  // TODO(gfr) Return status on error.
+  void Open() {
+    // Compare current time to file open time.
+    if (0) {
+      // Generate the file name.
+      //
+      // Open the file.
+    }
+  }
+
+  // TODO(gfr) Return status on error.
+  void WriteRecord(const std::string& record) {
+//    fputs(record)
+  }
+
+ private:
+  std::string path;  // The path prefix for the log files.
+  struct tm log_start_time;  // Time at which the current log file was opened.
+  std::string log_file_name;  // Name of the current log file.
+  std::fstream log;
+};
 
 int main(int argc, char* argv[]) {
   for (int i = 0; i < 30; ++i) {

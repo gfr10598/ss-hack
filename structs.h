@@ -1,4 +1,7 @@
-/* Code derived from iproute2 ss.c
+/* Code derived from iproute2 ss.c.  Forked from net-next Sept 2016.
+ *
+ * Contains common structs and functions required across SideStream modules.
+ *
  *  This program is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU General Public License
  *  as published by the Free Software Foundation; either version
@@ -17,19 +20,6 @@
 #include <linux/inet_diag.h>
 #include <linux/unix_diag.h>
 
-#define DIAG_REQUEST(_req, _r)                \
-  struct {                  \
-    struct nlmsghdr nlh;              \
-    _r;                 \
-  } _req = {                  \
-    .nlh = {                \
-      .nlmsg_type = SOCK_DIAG_BY_FAMILY,        \
-      .nlmsg_flags = NLM_F_ROOT|NLM_F_MATCH|NLM_F_REQUEST,\
-      .nlmsg_seq = MAGIC_SEQ,           \
-      .nlmsg_len = sizeof(_req),          \
-    },                  \
-  }
-
 enum {
   TCP_DB,
   DCCP_DB,
@@ -43,11 +33,6 @@ enum {
   NETLINK_DB,
   MAX_DB
 };
-
-#define PACKET_DBM ((1<<PACKET_DG_DB)|(1<<PACKET_R_DB))
-#define UNIX_DBM ((1<<UNIX_DG_DB)|(1<<UNIX_ST_DB)|(1<<UNIX_SQ_DB))
-#define ALL_DB ((1<<MAX_DB)-1)
-#define INET_DBM ((1<<TCP_DB)|(1<<UDP_DB)|(1<<DCCP_DB)|(1<<RAW_DB))
 
 enum {
   SS_UNKNOWN,
@@ -68,8 +53,6 @@ enum {
 #define SS_ALL ((1 << SS_MAX) - 1)
 #define SS_CONN (SS_ALL & ~((1<<SS_LISTEN)|(1<<SS_CLOSE)|(1<<SS_TIME_WAIT)|(1<<SS_SYN_RECV)))
 
-#include "ssfilter.h"
-
 struct filter {
   int dbs;
   int states;
@@ -78,22 +61,6 @@ struct filter {
   bool kill;
 };
 
-#if 0
-static const char *sstate_name[] = {
-  "UNKNOWN",
-  [SS_ESTABLISHED] = "ESTAB",
-  [SS_SYN_SENT] = "SYN-SENT",
-  [SS_SYN_RECV] = "SYN-RECV",
-  [SS_FIN_WAIT1] = "FIN-WAIT-1",
-  [SS_FIN_WAIT2] = "FIN-WAIT-2",
-  [SS_TIME_WAIT] = "TIME-WAIT",
-  [SS_CLOSE] = "UNCONN",
-  [SS_CLOSE_WAIT] = "CLOSE-WAIT",
-  [SS_LAST_ACK] = "LAST-ACK",
-  [SS_LISTEN] = "LISTEN",
-  [SS_CLOSING] = "CLOSING",
-};
-#endif
 struct sockstat {
   struct sockstat    *next;
   unsigned int      type;
@@ -114,58 +81,28 @@ struct sockstat {
   __u32       mark;
 };
 
-struct dctcpstat {
-  unsigned int  ce_state;
-  unsigned int  alpha;
-  unsigned int  ab_ecn;
-  unsigned int  ab_tot;
-  bool    enabled;
-};
+#ifdef __cplusplus
+#define EXTERN_C extern "C"
+#else
+#define EXTERN_C
+#endif
 
-struct tcpstat {
-  struct sockstat     ss;
-  int       timer;
-  int       timeout;
-  int       probes;
-  char        cong_alg[16];
-  double        rto, ato, rtt, rttvar;
-  int       qack, ssthresh, backoff;
-  double        send_bps;
-  int       snd_wscale;
-  int       rcv_wscale;
-  int       mss;
-  unsigned int      cwnd;
-  unsigned int      lastsnd;
-  unsigned int      lastrcv;
-  unsigned int      lastack;
-  double        pacing_rate;
-  double        pacing_rate_max;
-  unsigned long long  bytes_acked;
-  unsigned long long  bytes_received;
-  unsigned int      segs_out;
-  unsigned int      segs_in;
-  unsigned int      data_segs_out;
-  unsigned int      data_segs_in;
-  unsigned int      unacked;
-  unsigned int      retrans;
-  unsigned int      retrans_total;
-  unsigned int      lost;
-  unsigned int      sacked;
-  unsigned int      fackets;
-  unsigned int      reordering;
-  unsigned int      not_sent;
-  double        rcv_rtt;
-  double        min_rtt;
-  int       rcv_space;
-  bool        has_ts_opt;
-  bool        has_sack_opt;
-  bool        has_ecn_opt;
-  bool        has_ecnseen_opt;
-  bool        has_fastopen_opt;
-  bool        has_wscale_opt;
-  struct dctcpstat    *dctcp;
-  struct tcp_bbr_info *bbr_info;
-};
+// Poll all tcp socket connections in established state.
+EXTERN_C
+int poll(void);
 
+// TODO(gfr) Move this to another .h file.
+EXTERN_C
+void stash_data_internal(int family, int protocol,
+                         const struct inet_diag_sockid id,
+                         const struct nlmsghdr *nlh);
+
+// Print status data for a socket.
+EXTERN_C
+int inet_show_sock(const struct nlmsghdr *nlh, struct sockstat *s,
+                   int protocol);
+// Create sockstat structure from a raw message.
+EXTERN_C
+void parse_diag_msg(const struct nlmsghdr *nlh, struct sockstat *s);
 
 #endif  // MISC_STRUCTS_H
