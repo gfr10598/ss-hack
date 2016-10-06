@@ -14,6 +14,8 @@
  * Original ss.c Author: Alexey Kuznetsov, <kuznet@ms2.inr.ac.ru>
  */
 
+#include "poll_tcpinfo.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -28,9 +30,6 @@
 #include "utils.h"
 #include "rt_names.h"
 #include "libnetlink.h"
-
-#include "structs.h"
-
 
 int resolve_hosts;
 static int resolve_services = 1;

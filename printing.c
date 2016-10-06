@@ -15,7 +15,7 @@
 
 #include "rt_names.h"
 
-#include "structs.h"
+#include "poll_tcpinfo.h"
 
 struct dctcpstat {
   unsigned int  ce_state;

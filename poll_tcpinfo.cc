@@ -13,7 +13,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-#include "structs.h"
+#include "poll_tcpinfo.h"
 
 #define VERBOSE 0
 

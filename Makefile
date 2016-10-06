@@ -23,9 +23,9 @@ endif
 
 all: $(TARGETS)
 
-poll_tcpinfo_base.o: structs.h poll_tcpinfo_base.c
-
-poll_tcpinfo.o: structs.h poll_tcpinfo.cc
+poll_tcpinfo_base.o: poll_tcpinfo.h poll_tcpinfo_base.c
+poll_tcpinfo.o: poll_tcpinfo.h poll_tcpinfo.cc
+printing.o: poll_tcpinfo.h printing.c
 
 poll_tcpinfo: $(POLLING_OBJ)
 	$(QUIET_LINK)$(CXX) $^ $(LDFLAGS) $(LDLIBS) $(LOADLIBES) -std=c++11 -o $@

@@ -8,8 +8,8 @@
  *  2 of the License, or (at your option) any later version.
 */
 
-#ifndef MISC_STRUCTS_H
-#define MISC_STRUCTS_H
+#ifndef MISC_POLL_TCPINFO_H_
+#define MISC_POLL_TCPINFO_H_
 
 #include "utils.h"
 
@@ -105,4 +105,4 @@ int inet_show_sock(const struct nlmsghdr *nlh, struct sockstat *s,
 EXTERN_C
 void parse_diag_msg(const struct nlmsghdr *nlh, struct sockstat *s);
 
-#endif  // MISC_STRUCTS_H
+#endif  // MISC_POLL_TCPINFO_H_
